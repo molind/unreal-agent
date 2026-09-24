@@ -41,3 +41,9 @@ an interruption. It resets the draft, partial key bytes and pending history
 navigation under the render lock, preserving submitted history, live status and
 an open chooser. Interrupt keys use the same acknowledged application handoff as
 submitted lines, so a later key cannot race ahead of a stop/join decision.
+
+Multiline drafts use a source-rune layout and a height-bounded viewport under the
+same editor lock. Option+Return / Ctrl-J insert LF at column zero; Up/Down navigate
+text columns while Ctrl-P/N retain explicit history navigation. Single-line
+editing keeps the upstream incremental fast path. No mouse reporting, copy
+hitboxes, clipboard controls, or alternate screen are used.

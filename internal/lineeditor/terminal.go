@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"unicode/utf8"
 )
@@ -91,7 +93,8 @@ type Terminal struct {
 	// line is the current line being entered.
 	line []rune
 	// pos is the logical position of the cursor in line
-	pos int
+	pos      int
+	draftTop int // First visible row of a multiline draft.
 	// echo is true if local echo is enabled
 	echo bool
 	// pasteActive is true iff there is a bracketed paste operation in
@@ -175,6 +178,8 @@ const (
 	keyTranspose
 	keyPasteStart
 	keyPasteEnd
+	keyHistoryPrev
+	keyHistoryNext
 )
 
 var (
@@ -192,6 +197,8 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 
 	if !pasteActive {
 		switch b[0] {
+		case 10: // Ctrl-J (also used by some terminals for Option+Return)
+			return KeyNewline, b[1:]
 		case 1: // ^A
 			return keyHome, b[1:]
 		case 2: // ^B
@@ -211,9 +218,9 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 		case 23: // ^W
 			return keyDeleteWord, b[1:]
 		case 14: // ^N
-			return keyDown, b[1:]
+			return keyHistoryNext, b[1:]
 		case 16: // ^P
-			return keyUp, b[1:]
+			return keyHistoryPrev, b[1:]
 		}
 	}
 
@@ -227,6 +234,8 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 	// recognize these before the generic unknown-escape handler consumes them.
 	if !pasteActive && len(b) >= 2 && b[0] == keyEscape {
 		switch b[1] {
+		case '\r', '\n':
+			return KeyNewline, b[2:]
 		case 'b':
 			return keyAltLeft, b[2:]
 		case 'f':
@@ -240,6 +249,14 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 		}
 		r, l := utf8.DecodeRune(b)
 		return r, b[l:]
+	}
+
+	if !pasteActive {
+		for _, sequence := range []string{"\x1b[13;3u", "\x1b[13;9u", "\x1b[27;3;13~"} {
+			if bytes.HasPrefix(b, []byte(sequence)) {
+				return KeyNewline, b[len(sequence):]
+			}
+		}
 	}
 
 	if !pasteActive && len(b) >= 3 && b[0] == keyEscape && b[1] == '[' {
@@ -312,10 +329,17 @@ func (t *Terminal) moveCursorToPos(pos int) {
 		return
 	}
 
+	if t.multiline() {
+		t.moveMultiline(pos)
+		return
+	}
 	x := visualLength(t.prompt) + pos
 	y := t.statusHeight + x/t.termWidth
 	x = x % t.termWidth
+	t.moveCursor(x, y)
+}
 
+func (t *Terminal) moveCursor(x, y int) {
 	up := 0
 	if y < t.cursorY {
 		up = t.cursorY - y
@@ -390,6 +414,14 @@ func (t *Terminal) clearLineToRight() {
 const maxLineLength = 4096
 
 func (t *Terminal) setLine(newLine []rune, newPos int) {
+	if t.multiline() || slices.Contains(newLine, '\n') {
+		t.line, t.pos = newLine, newPos
+		if !t.multiline() {
+			t.draftTop = 0
+		}
+		t.repaint(t.statusRows(len(t.line)))
+		return
+	}
 	if len(newLine) > len(t.line) {
 		t.fitStatus(len(newLine))
 	}
@@ -436,6 +468,16 @@ func (t *Terminal) eraseNPreviousChars(n int) {
 	if t.pos < n {
 		n = t.pos
 	}
+	if t.multiline() {
+		t.pos -= n
+		copy(t.line[t.pos:], t.line[t.pos+n:])
+		t.line = t.line[:len(t.line)-n]
+		if !t.multiline() {
+			t.draftTop = 0
+		}
+		t.repaint(t.statusRows(len(t.line)))
+		return
+	}
 	t.pos -= n
 	t.moveCursorToPos(t.pos)
 
@@ -460,13 +502,13 @@ func (t *Terminal) countToLeftWord() int {
 
 	pos := t.pos - 1
 	for pos > 0 {
-		if t.line[pos] != ' ' {
+		if t.line[pos] != ' ' && t.line[pos] != '\n' {
 			break
 		}
 		pos--
 	}
 	for pos > 0 {
-		if t.line[pos] == ' ' {
+		if t.line[pos] == ' ' || t.line[pos] == '\n' {
 			pos++
 			break
 		}
@@ -481,13 +523,13 @@ func (t *Terminal) countToLeftWord() int {
 func (t *Terminal) countToRightWord() int {
 	pos := t.pos
 	for pos < len(t.line) {
-		if t.line[pos] == ' ' {
+		if t.line[pos] == ' ' || t.line[pos] == '\n' {
 			break
 		}
 		pos++
 	}
 	for pos < len(t.line) {
-		if t.line[pos] != ' ' {
+		if t.line[pos] != ' ' && t.line[pos] != '\n' {
 			break
 		}
 		pos++
@@ -580,6 +622,12 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 		t.pos = len(t.line)
 		t.moveCursorToPos(t.pos)
 	case keyUp:
+		if t.multiline() {
+			t.moveVertical(-1)
+			return
+		}
+		fallthrough
+	case keyHistoryPrev:
 		entry, ok := t.historyAt(t.historyIndex + 1)
 		if !ok {
 			return "", false
@@ -591,6 +639,12 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 		runes := []rune(entry)
 		t.setLine(runes, len(runes))
 	case keyDown:
+		if t.multiline() {
+			t.moveVertical(1)
+			return
+		}
+		fallthrough
+	case keyHistoryNext:
 		switch t.historyIndex {
 		case -1:
 			return
@@ -607,14 +661,23 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 			}
 		}
 	case keyEnter, keyLF:
-		// Never commit the transient rows when accepting a line.
-		t.hideStatus()
-		t.moveCursorToPos(len(t.line))
+		// A multiline viewport is transient. Commit the entire draft once,
+		// without status or copy decorations, even when its first rows scrolled.
+		if t.multiline() {
+			t.clearInput()
+			t.writeInputPrompt()
+			t.queue([]rune(strings.ReplaceAll(string(t.line), "\n", "\r\n")))
+		} else {
+			t.hideStatus()
+			t.moveCursorToPos(len(t.line))
+		}
 		t.queue([]rune("\r\n"))
 		line = string(t.line)
 		ok = true
 		t.line = t.line[:0]
 		t.pos = 0
+		t.draftTop = 0
+		t.statusHeight = 0
 		t.cursorX = 0
 		t.cursorY = 0
 		t.maxLine = 0
@@ -622,6 +685,10 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 		// Delete zero or more spaces and then one or more characters.
 		t.eraseNPreviousChars(t.countToLeftWord())
 	case keyDeleteLine:
+		if t.multiline() {
+			t.setLine(t.line[:t.pos], t.pos)
+			return
+		}
 		// Delete everything from the current cursor position to the
 		// end of line.
 		for i := t.pos; i < len(t.line); i++ {
@@ -653,6 +720,10 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 		if t.pos < len(t.line) {
 			t.pos++
 		}
+		if t.multiline() {
+			t.repaint(t.statusRows(len(t.line)))
+			return
+		}
 		if t.echo {
 			t.moveCursorToPos(swap - 1)
 			t.writeLine(t.line[swap-1:])
@@ -678,7 +749,10 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 				return
 			}
 		}
-		if !isPrintable(key) {
+		if key == KeyNewline {
+			key = '\n'
+		}
+		if !isPrintable(key) && key != '\n' {
 			return
 		}
 		if len(t.line) == maxLineLength {
@@ -692,6 +766,14 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 // addKeyToLine inserts the given key at the current position in the current
 // line.
 func (t *Terminal) addKeyToLine(key rune) {
+	if t.multiline() || key == '\n' {
+		t.line = append(t.line, 0)
+		copy(t.line[t.pos+1:], t.line[t.pos:])
+		t.line[t.pos] = key
+		t.pos++
+		t.repaint(t.statusRows(len(t.line)))
+		return
+	}
 	t.fitStatus(len(t.line) + 1)
 	if len(t.line) == cap(t.line) {
 		newLine := make([]rune, len(t.line), 2*(1+len(t.line)))
@@ -754,7 +836,7 @@ func (t *Terminal) Write(buf []byte) (n int, err error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil {
+	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
 		// This is the easy case: there's nothing on the screen that we
 		// have to move out of the way.
 		return writeWithCRLF(t.c, buf)
@@ -782,7 +864,7 @@ func (t *Terminal) Write(buf []byte) (n int, err error) {
 	}
 
 	t.writePrompt()
-	if t.echo && t.selection == nil {
+	if t.echo && t.selection == nil && !t.multiline() {
 		t.writeLine(t.line)
 	}
 
@@ -835,7 +917,7 @@ func (t *Terminal) ReadLine() (line string, err error) {
 func (t *Terminal) readLine() (line string, err error) {
 	// t.lock must be held at this point
 
-	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil {
+	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
 		t.writePrompt()
 		t.c.Write(t.outBuf)
 		t.outBuf = t.outBuf[:0]
@@ -956,7 +1038,9 @@ func (t *Terminal) clearAndRepaintLinePlusNPrevious(numPrevLines int) {
 	t.cursorX, t.cursorY = 0, 0
 
 	t.writePrompt()
-	t.writeLine(t.line)
+	if !t.multiline() {
+		t.writeLine(t.line)
+	}
 	t.moveCursorToPos(t.pos)
 }
 
@@ -972,7 +1056,7 @@ func (t *Terminal) SetSize(width, height int) error {
 	if width == t.termWidth && height == t.termHeight {
 		return nil
 	}
-	visible := t.cursorX != 0 || t.cursorY != 0 || t.selection != nil
+	visible := t.cursorX != 0 || t.cursorY != 0 || t.selection != nil || t.multiline()
 	if visible {
 		// A height reduction can move the top of the region off screen.
 		t.cursorY = min(t.cursorY, height-1)
@@ -982,7 +1066,7 @@ func (t *Terminal) SetSize(width, height int) error {
 	t.termWidth, t.termHeight = width, height
 	if visible {
 		t.writePrompt()
-		if t.selection == nil {
+		if t.selection == nil && !t.multiline() {
 			t.writeLine(t.line)
 		}
 		t.moveCursorToPos(t.pos)

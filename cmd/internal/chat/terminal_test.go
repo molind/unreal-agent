@@ -229,3 +229,24 @@ func TestTerminalOptionWordMotion(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalOptionReturnPreservesMultilineDraft(t *testing.T) {
+	for _, key := range []string{"\x1b\r", "\x1b\n", "\x1b[13;3u", "\n"} {
+		got, _, _ := editTerminal(t, "first"+key+"second\r")
+		if len(got) != 1 || got[0].text != "first\nsecond" || !got[0].literal {
+			t.Fatalf("multiline input changed: %#v", got)
+		}
+		got, _, _ = editTerminal(t, "/exit"+key+"\r")
+		if len(got) != 1 || got[0].text != "/exit\n" || !got[0].literal {
+			t.Fatal("explicit newline became a command")
+		}
+		got, _, _ = editTerminal(t, "first"+key+bracketed("block\ncontents")+"\x03fresh\r")
+		if len(got) != 2 || !got[0].cleared || got[1].text != "fresh" {
+			t.Fatal("Ctrl-C retained multiline draft")
+		}
+	}
+	got, _, _ := editTerminal(t, "first\x1b\rsecond")
+	if len(got) != 0 {
+		t.Fatal("Option+Return auto-submitted")
+	}
+}

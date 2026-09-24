@@ -68,7 +68,10 @@ and code blocks are rendered using the goldmark parser. Prose wraps at words
 (to at most 100 columns). Replies start at the left edge, without artificial
 leading spaces. Code rows have no decorative left border or list/quote prefix,
 so selecting them copies only the code's own indentation and text. Language
-headings and top/bottom borders remain outside the code rows. Code keeps its
+headings and boundaries use ordinary Markdown fences: `` ```lang ``, code, then
+`` ``` ``. Fences are lengthened when needed for code that contains backticks.
+Replies have one blank separator line, and text selection/copying belongs to the
+terminal: no mouse capture, Copy buttons, or clipboard integration. Code keeps its
 indentation and line breaks, with tabs expanded for display only. No syntax
 highlighter, HTML execution, external image fetching, or hidden OSC links are used. Canonical history/model context is unchanged.
 
@@ -102,8 +105,15 @@ On a TTY with `TERM` set (not `dumb`), a locally extended `golang.org/x/term` li
   `ESC f` sequences) and Alt/Meta-modified CSI arrows are recognized, including
   the usual macOS terminal mappings. Terminal shortcuts must be configured to send these
   keys to the application rather than intercept them locally.
-- Up/Down or Ctrl-P/N: recall the last 100 submitted lines **in this process**.
-  This editing history is not a separate persistent input log.
+- Option+Return (or Ctrl-J) inserts a real newline without submitting. The next
+  line starts at column zero, without padding to align it after `you> `. Enter
+  submits all lines as one message; multiline slash text remains user content.
+- Up/Down move within multiline drafts; Ctrl-P/N always recall history. In a
+  single-line draft Up/Down recall history as before. Home/End (Ctrl-A/E) move to
+  the beginning/end of the whole draft. History holds the last 100 submissions
+  in this process and preserves multiline text; it is not a separate input log.
+  Tall multiline drafts scroll within the editor viewport. Async output, resize,
+  editing and Ctrl-C retain their existing behavior.
 - Ctrl-C follows the current state, not a timed double-press counter:
   1. A nonempty draft is cleared, including inline text, folded paste, and an
      over-limit/rejected draft. No model/tool is stopped and nothing is submitted

@@ -569,7 +569,7 @@ func TestTTYReadableTranscriptAndInlinePaste(t *testing.T) {
 			}
 			cli.wait("Markdown done.")
 			s.waitPrompt()
-			for _, want := range []string{"Summary", "Ready", "• first result", "╭─ sh", "printf '**literal**'", "gpt-6-astra / xhigh"} {
+			for _, want := range []string{"Summary", "Ready", "• first result", "```sh", "printf '**literal**'", "gpt-6-astra / xhigh"} {
 				if !strings.Contains(s.text(), want) {
 					t.Fatalf("missing formatted content %q:\n%s", want, s.text())
 				}
@@ -587,7 +587,7 @@ func TestTTYReadableTranscriptAndInlinePaste(t *testing.T) {
 					t.Fatalf("copyable row %q has a gutter or altered indentation:\n%s", want, s.text())
 				}
 			}
-			for _, raw := range []string{"## Summary", "**Ready**", "```", "assistant>"} {
+			for _, raw := range []string{"## Summary", "**Ready**", "assistant>"} {
 				if strings.Contains(s.text(), raw) {
 					t.Fatalf("raw formatting %q:\n%s", raw, s.text())
 				}
@@ -617,6 +617,11 @@ func TestTTYReadableTranscriptAndInlinePaste(t *testing.T) {
 			}
 			cli.send("/exit\r")
 			cli.finish(0)
+			for _, forbidden := range []string{"[Copy", "\x1b[?1000h", "\x1b[?1003h", "\x1b[?1006h", "\x1b]52;"} {
+				if strings.Contains(cli.snapshot(), forbidden) {
+					t.Fatalf("native selection still intercepted: %q", forbidden)
+				}
+			}
 		})
 	}
 }

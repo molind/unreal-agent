@@ -17,7 +17,7 @@ func (t *Terminal) SetStatus(rows []string) error {
 	}
 	t.status = slices.Clone(rows)
 	// ReadLine will render these if there is currently no editable region.
-	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil {
+	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
 		return nil
 	}
 	t.repaint(t.statusRows(len(t.line)))
@@ -37,7 +37,7 @@ func (t *Terminal) SetPromptInfo(text string, color bool) error {
 		return nil
 	}
 	t.promptInfo, t.color = text, color
-	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil {
+	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
 		return nil
 	}
 	t.repaint(t.statusRows(len(t.line)))
@@ -50,6 +50,9 @@ func (t *Terminal) statusRows(lineLength int) int {
 	// Leave room for the entire draft and at least one transcript row. If the
 	// draft fills the screen, hide status instead of scrolling live frames away.
 	inputRows := (visualLength(t.prompt)+lineLength)/t.termWidth + 1
+	if t.multiline() {
+		inputRows = len(t.layoutDraft().rows)
+	}
 	rows := len(t.status)
 	if t.promptInfo != "" {
 		rows++
@@ -115,6 +118,10 @@ func (t *Terminal) writePrompt() {
 		return
 	}
 	t.writeStatus(t.statusRows(len(t.line)))
+	if t.multiline() {
+		t.writeMultiline()
+		return
+	}
 	t.writeInputPrompt()
 }
 
@@ -131,6 +138,10 @@ func (t *Terminal) repaint(rows int) {
 		return
 	}
 	t.writeStatus(rows)
+	if t.multiline() {
+		t.writeMultiline()
+		return
+	}
 	t.writeInputPrompt()
 	if t.echo {
 		t.writeLine(t.line)

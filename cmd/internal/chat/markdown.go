@@ -176,8 +176,28 @@ func (v markdownView) blocks(parent ast.Node, prefix string) string {
 }
 
 func (v markdownView) code(source []byte, language, prefix string) string {
+	// Use ordinary Markdown fences; lengthen them if the code contains a
+	// fence itself so the displayed block remains safe to copy as Markdown.
+	marker := byte('`')
+	if strings.ContainsRune(language, '`') {
+		marker = '~'
+	}
+	length, run := 3, 0
+	for _, b := range source {
+		if b == marker {
+			run++
+			length = max(length, run+1)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat(string(marker), length)
+	opening := fence + language
+	if marker == '~' && language != "" {
+		opening = fence + " " + language
+	}
 	var out strings.Builder
-	out.WriteString(prefix + paint(v.color, "2", "╭─ "+language) + "\n")
+	out.WriteString(prefix + paint(v.color, "2", opening) + "\n")
 	for _, line := range strings.Split(strings.TrimSuffix(v.safe(string(source)), "\n"), "\n") {
 		// Code rows carry only source indentation, never a decorative gutter
 		// or the parent list/quote prefix. Keep nesting on the heading/footer
@@ -185,6 +205,6 @@ func (v markdownView) code(source []byte, language, prefix string) string {
 		// expanded only in the view; canonical history is never modified.
 		out.WriteString(strings.ReplaceAll(line, "\t", "    ") + "\n")
 	}
-	out.WriteString(prefix + paint(v.color, "2", "╰─") + "\n\n")
+	out.WriteString(prefix + paint(v.color, "2", fence) + "\n\n")
 	return out.String()
 }

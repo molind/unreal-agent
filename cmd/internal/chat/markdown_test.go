@@ -25,12 +25,12 @@ func TestMarkdownConversation(t *testing.T) {
 			}
 			output := out.String()
 			plain := terminalStyle.ReplaceAllString(output, "")
-			for _, want := range []string{"Assistant\n", "Вынік\n\n", "Звычайны важны тэкст", "• першы", "• другі", "3. праверка", "4. зборка", "│ цытата", "╭─ go", "    println(\"**literal**\")\n\nnext()\n", "╰─", "дакументацыя (https://example.org/docs)"} {
+			for _, want := range []string{"Assistant\n", "Вынік\n\n", "Звычайны важны тэкст", "• першы", "• другі", "3. праверка", "4. зборка", "│ цытата", "```go", "    println(\"**literal**\")\n\nnext()\n", "```", "дакументацыя (https://example.org/docs)"} {
 				if !strings.Contains(plain, want) {
 					t.Errorf("missing %q:\n%s", want, plain)
 				}
 			}
-			for _, unwanted := range []string{"assistant>", "## Вынік", "**важны**", "```", "\x1b[35m"} {
+			for _, unwanted := range []string{"assistant>", "## Вынік", "**важны**", "\x1b[35m"} {
 				if strings.Contains(output, unwanted) {
 					t.Errorf("raw/noisy formatting %q:\n%s", unwanted, output)
 				}
@@ -90,7 +90,7 @@ func TestMarkdownWrapAndSourcePreservation(t *testing.T) {
 	if !strings.Contains(plain, "\n  abcdefghijklmnopqrstuvwxyz\n") {
 		t.Fatal("code was reflowed or truncated")
 	}
-	prose := strings.Split(plain, "╭─")[0]
+	prose := strings.Split(plain, "```")[0]
 	for _, line := range strings.Split(prose, "\n") {
 		if utf8.RuneCountInString(line) > 23 {
 			t.Fatalf("unwrapped prose: %q", line)
@@ -161,13 +161,13 @@ func TestMarkdownCopyHasNoDecorativeIndentation(t *testing.T) {
 				"> ```py\n> if ready:\n>     first()\n>\n>     second()\n> ```",
 			} {
 				plain := terminalStyle.ReplaceAllString(d.markdown(body), "")
-				_, after, ok := strings.Cut(plain, "╭─ py\n")
+				_, after, ok := strings.Cut(plain, "```py\n")
 				if !ok {
 					t.Fatal("missing code heading")
 				}
 				var copied strings.Builder
 				for _, line := range strings.Split(after, "\n") {
-					if strings.Contains(line, "╰─") {
+					if strings.Contains(line, "```") {
 						break
 					}
 					copied.WriteString(line + "\n")
@@ -177,5 +177,40 @@ func TestMarkdownCopyHasNoDecorativeIndentation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSimpleCodeMarkersAndMessageSpacing(t *testing.T) {
+	for _, color := range []bool{false, true} {
+		var out bytes.Buffer
+		d := newDisplay(&out, func(string) string { return "" })
+		d.ui, d.color = &terminalUI{width: 80}, color
+		if err := d.message("assistant", "```go\nif ready {\n    work()\n}\n```"); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.message("assistant", "Next answer."); err != nil {
+			t.Fatal(err)
+		}
+		plain := terminalStyle.ReplaceAllString(out.String(), "")
+		want := "\nAssistant\n```go\nif ready {\n    work()\n}\n```\n\nAssistant\nNext answer.\n"
+		if plain != want {
+			t.Fatalf("layout = %q, want %q", plain, want)
+		}
+		if strings.ContainsAny(plain, "╭╰│") || strings.Contains(plain, "[Copy") {
+			t.Fatal("interactive/decorative copy UI remained")
+		}
+	}
+}
+
+func TestCodeFencesDoNotCloseInsideCode(t *testing.T) {
+	v := markdownView{safe: func(s string) string { return s }}
+	got := v.code([]byte("```go\nfmt.Println(1)\n```\n"), "markdown", "")
+	want := "````markdown\n```go\nfmt.Println(1)\n```\n````\n\n"
+	if got != want {
+		t.Fatalf("nested code fence: %q, want %q", got, want)
+	}
+	got = v.code([]byte("~~~\n"), "example`language", "")
+	if got != "~~~~ example`language\n~~~\n~~~~\n\n" {
+		t.Fatalf("invalid fence info string: %q", got)
 	}
 }

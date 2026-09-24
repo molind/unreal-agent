@@ -9,6 +9,7 @@ func (t *Terminal) ClearDraft() (bool, error) {
 	cleared := len(t.line) != 0 || len(t.remainder) != 0
 	t.line = t.line[:0]
 	t.pos = 0
+	t.draftTop = 0
 	t.remainder = nil
 	t.historyIndex = -1
 	t.historyPending = ""

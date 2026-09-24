@@ -120,9 +120,9 @@ func (t *Terminal) writeSelection() {
 func (t *Terminal) selectionKey(key rune) *Selection {
 	s := t.selection
 	switch key {
-	case keyUp:
+	case keyUp, keyHistoryPrev:
 		s.index = max(0, s.index-1)
-	case keyDown:
+	case keyDown, keyHistoryNext:
 		s.index = min(len(s.choices)-1, s.index+1)
 	case keyEnter, keyLF, keyEscape:
 		result := &Selection{Canceled: key == keyEscape}

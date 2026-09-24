@@ -98,6 +98,20 @@ func (u *terminalUI) editKey(text string, pos int, key rune) (string, int, bool)
 		u.reject("too many retained paste attachments")
 		return "", 0, true
 	}
+	if key == lineeditor.KeyNewline {
+		if u.rejected != "" {
+			return "", 0, true
+		}
+		if utf8.RuneCountInString(text) >= maxEditorRunes {
+			u.reject("editable draft exceeds 4096 cells")
+			return "", 0, true
+		}
+		if u.expandedSize(text)+1 > maxMessageBytes {
+			u.reject("message exceeds 1 MiB")
+			return "", 0, true
+		}
+		return text[:pos] + "\n" + text[pos:], pos + 1, true
+	}
 	if attachmentRune(key) {
 		u.reject("private attachment markers cannot be typed; paste this character instead")
 		return "", 0, true
@@ -191,6 +205,9 @@ func (u *terminalUI) readLine() (line, error) {
 		commandLine := strings.TrimSpace(result.text)
 		if result.literal && isCommand(commandLine) {
 			result.literal = false
+		}
+		if strings.ContainsRune(text, '\n') {
+			result.literal = true // Explicit Option+Return is content, not a command.
 		}
 
 		u.history.Add(text)
