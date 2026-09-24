@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -228,10 +229,14 @@ func TestSharedTTYLongOutput(t *testing.T) {
 			cli.send("long answer\r")
 			time.Sleep(250 * time.Millisecond)
 			cli.pause.Unlock()
-			cli.wait(answer)
+			cli.wait("THE-END")
+			plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(cli.snapshot(), "")
+			if !strings.Contains(strings.Join(strings.Fields(plain), " "), strings.Join(strings.Fields(answer), " ")) {
+				t.Fatal("word-wrapped long response was truncated or changed")
+			}
 			cli.send("/status\r")
 			cli.wait("Status: idle")
-			if strings.Contains(cli.snapshot(), "\x1b[35m") == noColor {
+			if regexp.MustCompile(`\x1b\[[0-9;]*m`).MatchString(cli.snapshot()) == noColor {
 				t.Fatal("NO_COLOR/color not respected")
 			}
 			cli.send("/exit\r")
@@ -536,4 +541,70 @@ func (c *ttyCLI) resize(rows, cols uint16) error {
 		return err
 	}
 	return ioctlErr
+}
+
+func TestTTYReadableTranscriptAndInlinePaste(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		t.Run(fmt.Sprint(noColor), func(t *testing.T) {
+			markdown := "## Summary\n\n**Ready** for `go test`.\n\n- first result\n- second result\n\n```sh\nprintf '**literal**'\n```\n\nMarkdown done."
+			requests := make(chan string, 4)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				requests <- string(body)
+				writeResponse(w, []any{messageOutput(markdown)})
+			}))
+			defer server.Close()
+			env := []string{"TERM=xterm"}
+			if noColor {
+				env = append(env, "NO_COLOR=1")
+			}
+			cli := startTTY(t, env, "-provider", "openai", "-base-url", server.URL, t.TempDir())
+			cli.wait("you> ")
+			s := &pickerScreen{t, cli, newLiveScreen(40, 24)}
+			s.resizeTo(80, 28)
+			cli.send("render Markdown\r")
+			select {
+			case <-requests:
+			case <-time.After(8 * time.Second):
+				t.Fatal("no model request")
+			}
+			cli.wait("Markdown done.")
+			s.waitPrompt()
+			for _, want := range []string{"Summary", "Ready", "• first result", "╭─ sh", "printf '**literal**'", "gpt-6-astra / xhigh"} {
+				if !strings.Contains(s.text(), want) {
+					t.Fatalf("missing formatted content %q:\n%s", want, s.text())
+				}
+			}
+			for _, raw := range []string{"## Summary", "**Ready**", "```", "assistant>"} {
+				if strings.Contains(s.text(), raw) {
+					t.Fatalf("raw formatting %q:\n%s", raw, s.text())
+				}
+			}
+			if strings.Contains(cli.snapshot(), "\x1b[1mReady\x1b[0m") == noColor || strings.Contains(cli.snapshot(), "\x1b[35m") {
+				t.Fatal("emphasis/neutral palette/NO_COLOR contract")
+			}
+			cli.send("\x1b[200~/Users/demo/file.go\x1b[201~\x7fX")
+			s.wait("/Users/demo/file.gX")
+			s.draft(t, "/Users/demo/file.gX", 0)
+			select {
+			case <-requests:
+				t.Fatal("paste submitted before Enter")
+			case <-time.After(100 * time.Millisecond):
+			}
+			cli.send("\r")
+			select {
+			case request := <-requests:
+				if lastUserText(t, request) != "/Users/demo/file.gX" {
+					t.Fatal("inline path was not delivered literally")
+				}
+				if !strings.Contains(request, "## Summary") || !strings.Contains(request, "**Ready**") {
+					t.Fatal("presentation modified canonical model context")
+				}
+			case <-time.After(8 * time.Second):
+				t.Fatal("pasted path treated as a command")
+			}
+			cli.send("/exit\r")
+			cli.finish(0)
+		})
+	}
 }

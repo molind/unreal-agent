@@ -73,7 +73,7 @@ func (s *pickerScreen) check() {
 	s.t.Helper()
 	s.update(s.cli.snapshot())
 	for _, row := range s.history {
-		if regexp.MustCompile(`^Resume [0-9]+/|^[> ] [0-9]+ [* ] |^ID: seed-|^.*running.*PICKER_TASK`).MatchString(row) {
+		if regexp.MustCompile(`^Resume [0-9]+/|^[> ] [0-9]+ [* ] |^ID: seed-|^.*running.*PICKER_TASK|^── `).MatchString(row) {
 			s.t.Fatalf("menu/live row in scrollback: %q", row)
 		}
 	}
@@ -265,7 +265,7 @@ func TestTTYSessionPickerWorkErrorsAndEOF(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "picker-release"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	cli.wait("\x1b[32mBash: printf PICKER_TASK; while [ ! -f picker-release ]; do sleep .05; done (")
+	cli.wait("\x1b[32m✓\x1b[0m Bash: printf PICKER_TASK")
 	request()
 	responses <- []any{messageOutput("ASYNC WHILE CHOOSING")}
 	s.wait("ASYNC WHILE CHOOSING")
@@ -279,7 +279,7 @@ func TestTTYSessionPickerWorkErrorsAndEOF(t *testing.T) {
 	cli.send("/resume\r")
 	s.selected(1)
 	cli.send("\r")
-	cli.wait(" canceled —")
+	cli.wait("canceled ·")
 	s.waitPrompt()
 	assertPickerProcessGone(t, workspace, "picker-confirm.pid")
 	cli.send("ctrl-c picker task\r")
@@ -290,7 +290,7 @@ func TestTTYSessionPickerWorkErrorsAndEOF(t *testing.T) {
 	s.selected(1)
 	cli.send("\x03")
 	cli.wait("Stopped.")
-	cli.wait(" canceled —")
+	cli.wait("canceled ·")
 	s.selected(1) // Ctrl-C stops work, not the chooser or process.
 	cli.send("\x1b")
 	s.waitPrompt()

@@ -89,28 +89,43 @@ func TestLiveOperationLifecycle(t *testing.T) {
 				}
 			}
 			text := transcript.String()
-			for i, want := range []string{"completed", "failed (exit 7)", "canceled", "failed"} {
-				if color && i == 0 {
-					matches := regexp.MustCompile(`\x1b\[32mBash: echo hello world; echo \[redacted\] \([0-9]+\.[0-9]s\)\n\x1b\[0m`).FindAllString(text, -1)
-					if len(matches) != 1 || strings.Contains(text, string(ops[i].ID)) || strings.Contains(text, "completed") {
-						t.Fatalf("compact green success: %q", text)
-					}
-					continue
-				}
-				notice := "tool " + string(ops[i].ID) + " " + want + " — Bash: echo hello world; echo [redacted]"
-				if strings.Count(text, notice) != 1 {
-					t.Fatalf("not exactly one %q: %s", notice, text)
-				}
+			plain := terminalStyle.ReplaceAllString(text, "")
+			if strings.Count(plain, "Bash: echo hello · +1 lines") != 4 || strings.Contains(plain, "private") || strings.Contains(plain, "world") {
+				t.Fatalf("commands were flattened, duplicated or not redacted: %q", text)
+			}
+			for i, state := range []string{"", "failed (exit 7)", "canceled", "failed"} {
+				marker := []string{"✓", "✗", "–", "✗"}[i]
 				code := []string{"32", "31", "33", "31"}[i]
-				if strings.Contains(text, "\x1b["+code+"m"+notice) != color {
-					t.Fatalf("result color: %q", text)
+				if !strings.Contains(text, paint(color, code, marker)+" Bash: echo hello") {
+					t.Fatalf("missing result marker/color: %q", text)
+				}
+				if strings.Contains(text, string(ops[i].ID)) {
+					t.Fatal("full operation ID leaked into compact transcript")
+				}
+				if state != "" && strings.Count(plain, state+" · "+string(ops[i].ID)[:8]+" · /status for details") != 1 {
+					t.Fatalf("missing or duplicated failure/cancellation: %q", text)
 				}
 			}
-			if color && strings.Count(text, "\x1b[0m") != 4 {
-				t.Fatal("missing resets")
+			if len(regexp.MustCompile(`✓ Bash: echo hello · \+1 lines  [0-9]+\.[0-9]s`).FindAllString(plain, -1)) != 1 {
+				t.Fatalf("missing compact success: %q", text)
+			}
+			if strings.Contains(text, "\x1b[32mBash:") || strings.Contains(plain, "completed") {
+				t.Fatal("whole command colored or noisy success state")
 			}
 			if !color && strings.Contains(text, "\x1b") {
 				t.Fatal("NO_COLOR")
+			}
+			transcript.Reset()
+			if err := d.status(); err != nil {
+				t.Fatal(err)
+			}
+			for _, op := range ops {
+				if !strings.Contains(transcript.String(), string(op.ID)) {
+					t.Fatal("/status lost the exact ID")
+				}
+			}
+			if !strings.Contains(transcript.String(), "world; echo [redacted]") {
+				t.Fatal("/status lost the full command or redaction")
 			}
 			d.generating = false
 			if err := d.tick(2); err != nil {

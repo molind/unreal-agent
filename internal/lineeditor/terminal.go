@@ -84,6 +84,8 @@ type Terminal struct {
 	// Status belongs to the same render lock and cursor origin as the editor.
 	status       []string
 	statusHeight int
+	promptInfo   string
+	color        bool
 	selection    *selection
 
 	// line is the current line being entered.

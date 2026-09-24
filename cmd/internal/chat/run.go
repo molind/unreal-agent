@@ -105,6 +105,12 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 	if file, ok := output.(*os.File); ok {
 		d.color = term.IsTerminal(int(file.Fd())) && getenv("NO_COLOR") == "" && getenv("TERM") != "dumb" && getenv("TERM") != ""
 	}
+	if ui != nil {
+		info := fmt.Sprintf("%s / %s | %s | /help", c.model, c.effort, filepath.Base(c.workspace))
+		if err := ui.editor.SetPromptInfo(d.safe(info), d.color); err != nil {
+			return boundary("terminal prompt", err)
+		}
+	}
 	a := &application{ctx: ctx, config: c, store: store, id: id, display: d, client: client, logs: log}
 	defer func() { result = errors.Join(result, a.stop()) }()
 	stage = "output startup"
@@ -336,7 +342,11 @@ func (a *application) announce() error {
 	if id == "" {
 		id = "(unsaved; first message saves)"
 	}
-	return a.display.print("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\nCommand logs: %s\nDiagnostic log: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort, filepath.Join(a.logs.directory, "commands"), a.logs.diagnostic)
+	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\nCommand logs: %s\nDiagnostic log: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort, filepath.Join(a.logs.directory, "commands"), a.logs.diagnostic)
+	if a.display.ui != nil {
+		return a.display.write("\n" + paint(a.display.color, "1", "  unreal chat") + "\n" + paint(a.display.color, "2", a.display.safe(text)) + "\n")
+	}
+	return a.display.print("%s", text)
 }
 
 func openSession(ctx context.Context, store *localfile.Store, requested string) (session.ID, error) {
@@ -529,7 +539,13 @@ func (a *application) accept(l line) (bool, error) {
 			return false, boundary("storage first input", err)
 		}
 		a.id = id
-		if err := a.announce(); err != nil {
+		if a.display.ui != nil {
+			// Saving the first message changes only identity; do not repeat
+			// the entire startup/configuration/log banner in the conversation.
+			if err := a.display.write(paint(a.display.color, "2", "  Session: "+string(id)+"\n")); err != nil {
+				return false, err
+			}
+		} else if err := a.announce(); err != nil {
 			return false, err
 		}
 		if err := a.start(); err != nil {

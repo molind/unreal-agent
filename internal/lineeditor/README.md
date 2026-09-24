@@ -8,7 +8,11 @@ it with newline-containing prompts or a competing cursor renderer.
 
 Local changes: `SetStatus` (`status.go`) runs under the existing editor lock;
 status rows share its cursor origin, disappear before Enter, and are repainted
-around asynchronous Write. Prompt remains `you> `. Rows are bounded by height,
+around asynchronous Write. `SetPromptInfo` adds a clipped context/rule row in
+that same region, with optional dim decorations and an accented `you> ` prompt.
+The prompt's text/visible width do not change. ANSI is queued separately from
+prompt glyphs so narrow wrapping cannot split an escape sequence. Context is
+hidden in selection mode and removed with status before Enter. Rows are bounded by height,
 clipped by width, and an overflow row reserves access to `/status`. Growing drafts
 shrink/hide status before it can scroll into history. Erase clears the entire
 editable tail (the prior chat transport did this substitution). Resize uses the

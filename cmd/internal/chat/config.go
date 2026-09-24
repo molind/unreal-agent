@@ -37,7 +37,10 @@ Arrows cross a folded block; Backspace/Delete removes it whole.
 History retains the blocks. Limit: 1 MiB per message, 4096 editable cells;
 exceeding either rejects the whole draft explicitly, never sends a prefix.
 Async output preserves the draft/cursor.
-Colors require a capable TTY; NO_COLOR disables color. Pipes remain plain.
+On capable terminals replies render headings, emphasis, lists, links and code.
+Tool notices are compact; /status retains full commands and operation IDs.
+A quiet model/workspace row separates the editable prompt from the transcript.
+NO_COLOR disables styling, not editing/layout. Pipes remain plain Markdown.
 Command and diagnostic log paths are shown at startup and /status.
 Startup and /new stay UNSAVED until the first actual user message.
 /resume opens a recent-first chooser: Up/Down move, Enter resumes, Esc cancels.

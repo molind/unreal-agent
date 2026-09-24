@@ -62,18 +62,30 @@ Type a complete line and press Enter. You can send another line while the model
 or tools are working: this steers the model without canceling pending tools.
 Assistant messages display on completion, not token by token. Tool notices show
 command descriptions, not raw tool output or JSONL.
-On capable terminals an animated vertical list sits immediately above `you> `:
-model/input-pending activity plus one row per running or canceling operation,
-with a short ID, command label, state, and elapsed time. Rows are clipped to the
-width and bounded by the height available above the draft, with an overflow
-count; `/status` still lists every operation with its full ID. Live rows and
-repeated ‘Working’ notices never enter the transcript. Each finished operation
-leaves one permanent notice: green success shows only the command description
-and duration (for example, `Bash: command (0.1s)`); red failure (including nonzero
-shell exits) and yellow cancellation retain the full ID and explicit state.
-Non-color/plain output retains full IDs and explicit lifecycle states, and
-plain/piped output uses notices instead of animation. Separate command logs are
-unchanged.
+On capable terminals replies use a neutral foreground and spaced conversation
+blocks. CommonMark headings, bold/italic emphasis, lists, quotes, visible links,
+and code blocks are rendered using the goldmark parser. Prose wraps at words
+(to at most 100 columns); code keeps its indentation and line breaks, with tabs
+expanded for display only. No syntax highlighter, HTML execution, external image
+fetching, or hidden OSC links are used. Canonical history/model context is unchanged.
+
+An animated vertical list shows model/input-pending activity plus one row per
+running/canceling operation, with a short ID, command label, state, and elapsed
+time. A quiet model/effort/workspace rule separates this area from `you> `, whose
+accent never colors the draft. All decorations share the editor's viewport and
+cursor ownership, disappear before submission, and hide when space is needed
+for the draft. The chooser temporarily replaces the input area.
+
+Each finished operation leaves one compact notice: a green **✓** for success,
+red **✗** for failure (including nonzero shell exits), or yellow **–** for
+cancellation. Commands stay neutral; duration and diagnostic metadata are muted.
+Long descriptions are clipped to the current width. Multiline scripts show their
+first line and an additional-line count rather than a flattened wall of code.
+Failures/cancellations retain an explicit state and short ID; **`/status` keeps
+the full IDs and descriptions**, including commands needed for `/cancel ID`.
+Live rows and repeated Working notices never enter the transcript. Command logs
+are unchanged. Plain/piped output retains the existing full-ID lifecycle notices
+and raw Markdown, without animation or terminal styling.
 
 ### Editing and colors
 
@@ -115,7 +127,8 @@ On a TTY with `TERM` set (not `dumb`), a locally extended `golang.org/x/term` li
   press Enter to start a fresh draft. No partial prefix is sent or added
   to history. Invalid UTF-8 and exhausted attachment storage are also rejected.
 
-Replies, replayed user messages, tool notices, and status use distinct colors.
+Color is reserved for the input accent, inline emphasis and result markers;
+ordinary assistant text uses the terminal's default foreground.
 Live command labels use ASCII escapes for non-ASCII characters to avoid width
 ambiguities; full Unicode labels remain in notices and `/status`. As in upstream
 x/term, wide/combining draft characters and drafts taller than the screen have
@@ -239,7 +252,9 @@ failures before log storage can be opened may only have stderr diagnostics.
   Forced termination/power loss cannot guarantee child cleanup or rollback.
   Existing unfinished sessions without a durable stop retain normal harness
   recovery behavior. Keep the same workspace when resuming custom storage.
-- This is not a full-screen UI or a Markdown renderer. The editor supports
+- This is not a full-screen UI or a browser. The Markdown view supports core
+  CommonMark, not extensions such as pipe tables or interactive links. Code is
+  not reflowed or syntax highlighted. The editor supports
   single-cell Unicode such as Belarusian; complex combining/emoji/wide-glyph
   cursor widths and terminal-specific reflow are limited by `x/term`.
   Messages/piped lines are limited to 1 MiB; the editable view to 4096 cells,
@@ -272,5 +287,9 @@ resume deduplication, redaction, error chains, boundary stacks and permissions.
 Seeded-session PTY tests check a visible moving chooser cursor, scrolling/resize,
 async tools and notices, cancel/confirm, missing/corrupt choices, Ctrl-C/EOF,
 restored model context, and durable session counts. Unit tests cover recent
-ordering, duplicate titles, safe Cyrillic rendering and plain fallback. Automated checks need neither real credentials
+ordering, duplicate titles, safe Cyrillic rendering and plain fallback. Markdown
+unit/fuzz tests cover redaction and terminal-control safety after entity decoding,
+prose wrapping, literal code and plain fallback. Paste tests cover short inline
+editing/history, both sides of the 160-character threshold, absolute paths,
+control-bearing blocks and whole-draft limits. Automated checks need neither real credentials
 nor a paid model; they do not demonstrate real-provider model availability.

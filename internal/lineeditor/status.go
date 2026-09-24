@@ -3,6 +3,7 @@ package lineeditor
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // SetStatus replaces transient rows above the single-line prompt. Rows must be
@@ -25,21 +26,51 @@ func (t *Terminal) SetStatus(rows []string) error {
 	return err
 }
 
+// SetPromptInfo adds a quiet, single-cell context/rule row immediately above
+// the prompt. It shares the status viewport and disappears before submission.
+// Controls and ambiguous-width Unicode in text are escaped, as in selections.
+// Color affects only editor-owned decorations, never the draft itself.
+func (t *Terminal) SetPromptInfo(text string, color bool) error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	if t.promptInfo == text && t.color == color {
+		return nil
+	}
+	t.promptInfo, t.color = text, color
+	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil {
+		return nil
+	}
+	t.repaint(t.statusRows(len(t.line)))
+	_, err := t.c.Write(t.outBuf)
+	t.outBuf = t.outBuf[:0]
+	return err
+}
+
 func (t *Terminal) statusRows(lineLength int) int {
 	// Leave room for the entire draft and at least one transcript row. If the
 	// draft fills the screen, hide status instead of scrolling live frames away.
 	inputRows := (visualLength(t.prompt)+lineLength)/t.termWidth + 1
-	return min(len(t.status), max(0, t.termHeight-inputRows-1))
+	rows := len(t.status)
+	if t.promptInfo != "" {
+		rows++
+	}
+	return min(rows, max(0, t.termHeight-inputRows-1))
 }
 
 func (t *Terminal) writeStatus(rows int) {
 	t.statusHeight = rows
+	info := t.selection == nil && t.promptInfo != "" && rows > 0
+	if info {
+		rows--
+	}
+	if t.color {
+		t.queue([]rune("\x1b[2m"))
+	}
 	for i := 0; i < rows; i++ {
 		text := t.status[i]
 		if i == rows-1 && rows < len(t.status) {
 			text = fmt.Sprintf("+%d more pending (/status)", len(t.status)-i)
 		}
-		// Keep the last column unused so a row cannot accidentally soft-wrap.
 		width := max(0, t.termWidth-1)
 		if len(text) > width {
 			if width > 3 {
@@ -52,6 +83,30 @@ func (t *Terminal) writeStatus(rows int) {
 		t.queue([]rune("\r\n"))
 		t.cursorY++
 	}
+	if info {
+		width := max(0, t.termWidth-1)
+		row := []rune("── ")
+		row = append(row, selectionText(t.promptInfo, max(0, width-len(row)-1))...)
+		if len(row) < width {
+			row = append(row, []rune(" "+strings.Repeat("─", width-len(row)-1))...)
+		}
+		t.queue(row[:min(len(row), width)])
+		t.queue([]rune("\r\n"))
+		t.cursorY++
+	}
+	if t.color {
+		t.queue([]rune("\x1b[0m"))
+	}
+}
+
+func (t *Terminal) writeInputPrompt() {
+	if t.color {
+		t.queue([]rune("\x1b[1;36m"))
+	}
+	t.writeLine(t.prompt)
+	if t.color {
+		t.queue([]rune("\x1b[0m"))
+	}
 }
 
 func (t *Terminal) writePrompt() {
@@ -60,7 +115,7 @@ func (t *Terminal) writePrompt() {
 		return
 	}
 	t.writeStatus(t.statusRows(len(t.line)))
-	t.writeLine(t.prompt)
+	t.writeInputPrompt()
 }
 
 func (t *Terminal) clearInput() {
@@ -76,7 +131,7 @@ func (t *Terminal) repaint(rows int) {
 		return
 	}
 	t.writeStatus(rows)
-	t.writeLine(t.prompt)
+	t.writeInputPrompt()
 	if t.echo {
 		t.writeLine(t.line)
 	}

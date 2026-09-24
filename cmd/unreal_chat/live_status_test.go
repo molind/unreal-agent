@@ -174,7 +174,7 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 		start := screen.offset
 		screen.update(text)
 		for _, row := range screen.history[before:] {
-			if regexp.MustCompile(`^[*+.\-] .* (running|canceling|model / input)|^\+[0-9]+ more pending`).MatchString(row) {
+			if regexp.MustCompile(`^[*+.\-] .* (running|canceling|model / input)|^\+[0-9]+ more pending|^── `).MatchString(row) {
 				t.Fatalf("transient at %dx%d, row %q, update %q", screen.width, screen.height, row, text[start:])
 			}
 		}
@@ -241,7 +241,7 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "finish-one"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	cli.wait("\x1b[32mBash: while [ ! -f finish-one ]; do sleep .05; done; printf ok (")
+	cli.wait("\x1b[32m✓\x1b[0m Bash: while")
 	request()
 	responses <- []any{messageOutput("success received")}
 	cli.wait("success received")
@@ -254,20 +254,19 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 		t.Fatalf("not idle:\n%s", screen.text())
 	}
 	text := cli.snapshot()
-	if matches := regexp.MustCompile(`\x1b\[32mBash: while \[ ! -f finish-one \]; do sleep \.05; done; printf ok \([0-9]+\.[0-9]s\)\r?\n\x1b\[0m`).FindAllString(text, -1); len(matches) != 1 {
-		t.Fatalf("compact green success count %d", len(matches))
+	if strings.Count(text, "\x1b[32m✓\x1b[0m Bash: while") != 1 {
+		t.Fatal("missing or duplicate compact success notice")
 	}
-	if strings.Contains(text, " completed —") || strings.Count(text, "mtool ") != 2 {
-		t.Fatal("unexpected success prefix or duplicate/running transcript notice")
+	if strings.Contains(text, " completed —") || strings.Contains(text, "\x1b[32mBash:") {
+		t.Fatal("noisy success prefix or whole-command color")
 	}
-	for _, pair := range []struct{ code, state string }{{"31", "failed (exit 7)"}, {"33", "canceled"}} {
-		re := regexp.MustCompile(regexp.QuoteMeta("\x1b["+pair.code+"mtool ") + "([a-zA-Z0-9-]+) " + regexp.QuoteMeta(pair.state) + " —")
-		matches := re.FindAllStringSubmatch(text, -1)
-		if len(matches) != 1 {
-			t.Fatalf("completion/color %s count %d", pair.state, len(matches))
+	for _, pair := range []struct{ code, marker, state string }{{"31", "✗", "failed (exit 7)"}, {"33", "–", "canceled"}} {
+		if strings.Count(text, "\x1b["+pair.code+"m"+pair.marker+"\x1b[0m Bash:") != 1 {
+			t.Fatalf("completion/color %s is missing or duplicated", pair.state)
 		}
-		if strings.Count(text, "tool "+matches[0][1]+" ") != 1 {
-			t.Fatal("duplicate/running transcript notice")
+		re := regexp.MustCompile(regexp.QuoteMeta(pair.state) + " · ([a-zA-Z0-9-]{8})")
+		if matches := re.FindAllStringSubmatch(text, -1); len(matches) != 1 {
+			t.Fatalf("state/short identity %s count %d", pair.state, len(matches))
 		}
 	}
 	cli.send("Ж\r")
@@ -298,7 +297,7 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	check()
 	screen.draft(t, smallDraft, 2)
-	if strings.Count(screen.text(), "running") != 5 || !strings.Contains(screen.text(), "+4 more pending") {
+	if strings.Count(screen.text(), "running") != 4 || !strings.Contains(screen.text(), "+5 more pending") {
 		t.Fatalf("overflow:\n%s", screen.text())
 	}
 	// Shrink while active with a cursor in the middle, then grow it again.
@@ -366,7 +365,7 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 	cli.finish(0)
 	check()
 	for _, row := range screen.history {
-		if regexp.MustCompile(`^[*+.\-] .* (running|canceling|model / input)|^\+[0-9]+ more pending`).MatchString(row) {
+		if regexp.MustCompile(`^[*+.\-] .* (running|canceling|model / input)|^\+[0-9]+ more pending|^── `).MatchString(row) {
 			t.Fatalf("transient row in scrollback: %q", row)
 		}
 	}

@@ -23,6 +23,7 @@ type terminalUI struct {
 	output    io.Writer
 	state     *term.State
 	control   int
+	width     int // Owned by the application event loop, like display state.
 	resize    chan os.Signal
 	interrupt chan os.Signal
 	failures  chan error
@@ -68,13 +69,18 @@ func (u *terminalUI) size() error {
 	if err != nil {
 		return err
 	}
-	return u.editor.SetSize(width, height)
+	if err := u.editor.SetSize(width, height); err != nil {
+		return err
+	}
+	u.width = width
+	return nil
 }
 func (u *terminalUI) close() error {
 	signal.Stop(u.resize)
 	// The reader has joined. Remove any still-animated status and leave the
 	// shell on a clean line, even if an error interrupted an unsubmitted draft.
 	_ = u.editor.CloseSelection()
+	_ = u.editor.SetPromptInfo("", false)
 	_ = u.editor.SetStatus(nil)
 	_, _ = u.editor.Write(nil)
 	_, _ = u.Write([]byte("\x1b[J\r\n"))
