@@ -125,7 +125,16 @@ func (current *coordinator) Run(ctx context.Context) error {
 	}
 
 	var heartbeat <-chan time.Time
+	var previousIdle bool
+	firstIdle := true
 	for {
+		if notify := current.dependencies.OnIdleChange; notify != nil {
+			idle := current.isIdle()
+			if firstIdle || idle != previousIdle {
+				notify(idle)
+				previousIdle, firstIdle = idle, false
+			}
+		}
 		if !current.isWaitingForOnlyToolCalls() {
 			heartbeat = nil
 		} else if heartbeat == nil && current.dependencies.ToolHeartbeatInterval > 0 {

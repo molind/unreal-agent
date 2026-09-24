@@ -15,6 +15,11 @@ import (
 )
 
 type Dependencies struct {
+	// OnIdleChange observes settled scheduling state, initially and on changes.
+	// Idle means no pending input, model request, or tool work. Called on the
+	// Run goroutine; the observer must not reenter the coordinator.
+	OnIdleChange func(idle bool)
+
 	// JoinModels waits for canceled adapter calls before Run returns.
 	// Adapters must honor cancellation. Useful for runtime switching.
 	JoinModels            bool

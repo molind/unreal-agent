@@ -15,19 +15,20 @@ import (
 	"golang.org/x/term"
 )
 
+var errInputInterrupt = errors.New("terminal input interrupted")
+
 // x/term owns editing, history, wrapping, and the lock that serializes redraws
 // with ReadLine. The application remains the sole consumer of harness events.
 type terminalUI struct {
-	editor    *lineeditor.Terminal
-	input     *os.File
-	output    io.Writer
-	state     *term.State
-	control   int
-	width     int // Owned by the application event loop, like display state.
-	resize    chan os.Signal
-	interrupt chan os.Signal
-	failures  chan error
-	once      sync.Once
+	editor   *lineeditor.Terminal
+	input    *os.File
+	output   io.Writer
+	state    *term.State
+	control  int
+	width    int // Owned by the application event loop, like display state.
+	resize   chan os.Signal
+	failures chan error
+	once     sync.Once
 	// Transport and immutable paste attachments belong to the input goroutine.
 	reader                    *bufio.Reader
 	paste                     bool
@@ -54,7 +55,7 @@ func openTerminal(input io.ReadCloser, output io.Writer, getenv func(string) str
 		_ = unix.Close(fd)
 		return nil, err
 	}
-	u := &terminalUI{input: in, output: output, state: state, control: fd, resize: make(chan os.Signal, 1), interrupt: make(chan os.Signal, 1), failures: make(chan error, 1)}
+	u := &terminalUI{input: in, output: output, state: state, control: fd, resize: make(chan os.Signal, 1), failures: make(chan error, 1)}
 	u.initEditor()
 	signal.Notify(u.resize, unix.SIGWINCH)
 	if err = u.size(); err != nil {
@@ -168,11 +169,9 @@ func (u *terminalUI) Read(p []byte) (int, error) {
 		}
 		if c == 3 {
 			u.sequence = nil
-			select {
-			case u.interrupt <- os.Interrupt:
-			default:
-			}
-			continue
+			// Return through ReadLine and its ordinary application handoff.
+			// Do not coalesce keys in a signal channel or read past a stop.
+			return 0, errInputInterrupt
 		}
 		if c == 0 {
 			continue

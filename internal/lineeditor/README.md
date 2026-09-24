@@ -34,3 +34,9 @@ before the reader proceeds, so immediately queued arrows belong to the chooser.
 Rows are viewport-bounded and removed before output/confirmation/cancel. Selected
 indices are retained during resize; opaque values preserve exact session identity.
 ASCII/Cyrillic chooser text is single-cell, with controls/other Unicode escaped.
+
+`ClearDraft` is called between `ReadLine` calls after the chat transport reports
+an interruption. It resets the draft, partial key bytes and pending history
+navigation under the render lock, preserving submitted history, live status and
+an open chooser. Interrupt keys use the same acknowledged application handoff as
+submitted lines, so a later key cannot race ahead of a stop/join decision.

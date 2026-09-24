@@ -97,7 +97,16 @@ On a TTY with `TERM` set (not `dumb`), a locally extended `golang.org/x/term` li
   Ctrl-W: delete the preceding word; Alt-Left/Right: move by word.
 - Up/Down or Ctrl-P/N: recall the last 100 submitted lines **in this process**.
   This editing history is not a separate persistent input log.
-- Ctrl-C: stop model/tools while keeping the chat and the draft being edited.
+- Ctrl-C follows the current state, not a timed double-press counter:
+  1. A nonempty draft is cleared, including inline text, folded paste, and an
+     over-limit/rejected draft. No model/tool is stopped and nothing is submitted
+     or added to history; previously submitted history is retained.
+  2. With an empty draft, active model/tool work is stopped and joined. The chat
+     remains open for another message.
+  3. With an empty draft and no work pending, exit the chat.
+  Rapid consecutive keys are handled in order; the exit step waits for stop/join.
+  An OS SIGINT (including plain/piped input) is not an editor key and follows
+  stop-when-busy / exit-when-idle. `/stop` always stops without exiting.
 - Ctrl-D: EOF on an empty draft; otherwise delete at the cursor.
 - Short, single-line bracketed paste (up to **160 printable Unicode characters**)
   inserts normal visible text: paths, IDs and short phrases can be edited one
@@ -118,7 +127,8 @@ On a TTY with `TERM` set (not `dumb`), a locally extended `golang.org/x/term` li
 - Move across a folded block with the arrows; Backspace/Delete removes the
   whole block. You can edit typed text before/after it and mix multiple blocks.
   To change a block’s contents, delete it and paste the replacement. History
-  recall and Ctrl-C retain the complete blocks, not just their visible markers.
+  recall retains the complete blocks, not just their visible markers. Ctrl-C
+  discards the current draft's blocks without deleting submitted history.
   Folded contents are not echoed; short printable pastes are visible like typing.
   Neither kind is fed to the terminal key parser or executed as escape sequences.
 - A complete message (typed text plus all blocks) supports **up to 1 MiB of
@@ -147,10 +157,13 @@ are used when either input or output is not a capable terminal.
 | `/resume` | Open a recent-first cursor chooser; Enter confirms, Esc cancels |
 | `/resume ID` | Stop/join current work and load an existing conversation |
 | `/cancel ID` | Cancel just that operation; other work continues |
-| `/stop` or Ctrl-C | Stop model generation and all tools, retaining history |
+| `/stop` | Stop model generation and all tools, retaining history and the chat |
+| Ctrl-C | Clear draft → stop active work → exit when idle |
 | `/exit`, `/quit`, or EOF | Stop/join work and close the application |
 
-A normal assistant answer never exits. Ctrl-C at idle is harmless. Stop records
+A normal assistant answer never exits. Ctrl-C at an empty, idle prompt exits.
+Idle is observed from the coordinator, including tool grace and pending result
+delivery, not inferred from a spinner or the presence of a runtime. Stop records
 a durable interruption: resuming does **not** retry the stopped request/tools or
 invent an assistant answer. The next user message starts new work in the same
 conversation. Cancellation cannot undo edits or external side effects already
@@ -183,8 +196,9 @@ Use **`/resume`** to choose without copying IDs. In a capable terminal:
 - Belarusian/Cyrillic titles remain readable. Controls, bidi formatting, and
   other potentially multi-cell Unicode are escaped in chooser rows. No saved
   prompt can execute terminal controls. Selector text/paste is not a model input.
-- Ctrl-C still stops model/tools, leaving the chooser open; Ctrl-D exits with
-  cleanup. A standalone Esc is recognized after a short (100 ms) key-sequence
+- With no draft, Ctrl-C stops active model/tools and leaves the chooser open;
+  when already idle it exits the chat. Esc cancels only the chooser; Ctrl-D exits
+  with cleanup. A standalone Esc is recognized after a short (100 ms) key-sequence
   timeout. Confirming alone invokes the existing stop/join/resume/replay path.
 
 Without a capable TTY, `/resume` prints an explanation and the saved session IDs;
@@ -291,5 +305,8 @@ ordering, duplicate titles, safe Cyrillic rendering and plain fallback. Markdown
 unit/fuzz tests cover redaction and terminal-control safety after entity decoding,
 prose wrapping, literal code and plain fallback. Paste tests cover short inline
 editing/history, both sides of the 160-character threshold, absolute paths,
-control-bearing blocks and whole-draft limits. Automated checks need neither real credentials
+control-bearing blocks and whole-draft limits. Interrupt tests cover draft
+clearing without cancellation, model/tool stop, rapid clear/stop/exit sequences,
+idle/chooser exit, attachment/history preservation, pending input and settled
+coordinator idle notifications. Automated checks need neither real credentials
 nor a paid model; they do not demonstrate real-provider model availability.

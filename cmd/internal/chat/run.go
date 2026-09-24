@@ -90,14 +90,13 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 		return err
 	}
 	var resize <-chan os.Signal
-	var keys <-chan os.Signal
 	var terminalErrors <-chan error
 	var ticks <-chan time.Time
 	if ui != nil {
 		d.ui = ui
 		d.out = ui.editor
 		defer func() { result = errors.Join(result, ui.close()) }()
-		resize, keys, terminalErrors = ui.resize, ui.interrupt, ui.failures
+		resize, terminalErrors = ui.resize, ui.failures
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		ticks = ticker.C
@@ -201,13 +200,6 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 			if err := d.tick(frame); err != nil {
 				return boundary("output status", err)
 			}
-		case <-keys:
-			if err := a.stop(); err != nil {
-				return err
-			}
-			if err := d.print("Stopped. Send a new message to continue.\n"); err != nil {
-				return boundary("output", err)
-			}
 		case <-ctx.Done():
 			return ctx.Err()
 		case _, ok := <-interrupts:
@@ -215,10 +207,10 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 				interrupts = nil
 				continue
 			}
-			if err := a.stop(); err != nil {
-				return err
-			}
-			if err := d.print("Stopped. Send a new message to continue.\n"); err != nil {
+			// OS signals (including plain/piped input) have no editor key
+			// event. Keyboard Ctrl-C uses the ordered line handoff below.
+			exit, err := a.interrupt()
+			if err != nil || exit {
 				return err
 			}
 		case e, ok := <-events:
@@ -262,6 +254,8 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 }
 
 type line struct {
+	interrupt bool
+	cleared   bool
 	selection *lineeditor.Selection
 	literal   bool // A multiline pasted body is content, not a chat command.
 	text      string
@@ -294,7 +288,15 @@ func (a *application) start() error {
 	return a.logs.event("runtime", "started", a.id, "", nil)
 }
 func (a *application) event(e event) error {
+	if e.idle != nil {
+		a.runtime.idle = *e.idle
+		return nil
+	}
 	if e.item != nil {
+		if input, ok := e.item.Data.(inbox.Input); ok && input.Kind == inbox.InputExternal {
+			a.runtime.pendingInputs--
+			a.runtime.idle = false // Ack precedes the next settled-state notification.
+		}
 		if status, ok := e.item.Data.(sessionstore.ToolCallStatus); ok && status.Status.Error != "" {
 			if err := a.logs.event("tool translation", "failed", a.id, "", errors.New(status.Status.Error)); err != nil {
 				return err
@@ -307,6 +309,30 @@ func (a *application) event(e event) error {
 	}
 	return nil
 }
+
+// Drain already-observed state before deciding whether a second-tier interrupt
+// stops work or exits. In particular, UI/model-response timing is not an idle
+// signal: tools can be translating, in grace, or awaiting a follow-up turn.
+func (a *application) interrupt() (bool, error) {
+	if r := a.runtime; r != nil {
+		// Bound the drain to this snapshot: continuously arriving progress
+		// must not postpone the stop control indefinitely.
+		for range len(r.events) {
+			if err := a.event(<-r.events); err != nil {
+				return false, err
+			}
+		}
+		// An older idle notification must not hide input still in the inbox.
+		if !r.idle || r.pendingInputs != 0 {
+			if err := a.stop(); err != nil {
+				return false, err
+			}
+			return false, a.display.print("Stopped. Send a new message to continue. Ctrl-C on an empty prompt exits.\n")
+		}
+	}
+	return true, nil
+}
+
 func (a *application) stop() error {
 	r := a.runtime
 	if r == nil {
@@ -514,6 +540,12 @@ func (a *application) command(text string) (bool, error) {
 // The empty ID is the unsaved conversation, not a second persistence flag.
 // Only acceptance of real user content crosses the durable creation boundary.
 func (a *application) accept(l line) (bool, error) {
+	if l.interrupt {
+		if l.cleared {
+			return false, a.display.print("Draft cleared.\n")
+		}
+		return a.interrupt()
+	}
 	if l.selection != nil {
 		if l.selection.Canceled {
 			return false, nil
@@ -558,6 +590,7 @@ func (a *application) accept(l line) (bool, error) {
 		if err := a.runtime.inputs.Submit(a.ctx, input); err != nil {
 			return false, runtimeError(err)
 		}
+		a.runtime.pendingInputs++
 	}
 	return false, boundary("output", a.display.working())
 }

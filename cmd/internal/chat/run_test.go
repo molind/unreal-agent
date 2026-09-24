@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/unreallabsai/unreal-agent/cmd/internal/agentrunner"
+	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
@@ -153,7 +154,9 @@ func (c *chatTest) call() modelCall {
 }
 func (c *chatTest) finish(command string) {
 	c.t.Helper()
-	if command == "EOF" {
+	if command == "interrupt" {
+		c.interrupts <- os.Interrupt
+	} else if command == "EOF" {
 		_ = c.input.Close()
 	} else {
 		c.send(command)
@@ -273,9 +276,6 @@ func TestStopGenerationAndReplay(t *testing.T) {
 		t.Run(fmt.Sprint(interrupt), func(t *testing.T) {
 			workspace := t.TempDir()
 			c := launch(t, workspace, false)
-			// Idle Ctrl-C is harmless.
-			c.interrupts <- os.Interrupt
-			c.wait("Stopped.")
 			c.send("interrupted request")
 			call := c.call()
 			id := sessionID(t, c.output.snapshot())
@@ -711,5 +711,88 @@ func TestCommandRecognition(t *testing.T) {
 		if isCommand(text) {
 			t.Errorf("user text treated as command: %q", text)
 		}
+	}
+}
+
+func TestInterruptStopsThenExits(t *testing.T) {
+	workspace := t.TempDir()
+	c := launch(t, workspace, false)
+	c.finish("interrupt")
+	durableCount(t, workspace, 0)
+
+	c = launch(t, workspace, false)
+	c.send("work")
+	call := c.call()
+	c.interrupts <- os.Interrupt
+	c.wait("Stopped.")
+	waitCanceled(t, call.ctx)
+	c.finish("interrupt")
+	durableCount(t, workspace, 1)
+}
+
+func TestInterruptUsesSettledRuntimeStateInsteadOfDisplay(t *testing.T) {
+	var out strings.Builder
+	d := newDisplay(&out, func(string) string { return "" })
+	r := &runtime{events: make(chan event, 2)}
+	a := &application{display: d, runtime: r}
+	// A just-finished response can leave the display behind the event queue.
+	// The authoritative idle event is drained before deciding to exit.
+	d.generating = true
+	idle := true
+	r.events <- event{idle: &idle}
+	if exit, err := a.interrupt(); err != nil || !exit {
+		t.Fatalf("settled idle did not exit: %v, %v", exit, err)
+	}
+	// Clearing a draft must not inspect activity or touch this runtime at all.
+	r.idle = false
+	if exit, err := a.accept(line{interrupt: true, cleared: true}); err != nil || exit || a.runtime != r {
+		t.Fatalf("draft clear changed runtime: %v, %v", exit, err)
+	}
+}
+
+func TestInterruptPendingInputOverridesEarlierIdleEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	inputs, err := inbox.New(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := &runtime{inputs: inputs, idle: true, pendingInputs: 1, events: make(chan event, 1), done: make(chan error, 1), cancel: cancel}
+	a := &application{ctx: ctx, display: newDisplay(&out, func(string) string { return "" }), runtime: r}
+	idle := true
+	r.events <- event{idle: &idle}
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		select {
+		case input := <-inputs.Output():
+			control, err := input.DecodeControlMessage()
+			if err != nil || control.Mode != inbox.StopAndDiscard {
+				r.done <- fmt.Errorf("expected discard: %v", err)
+			} else {
+				r.done <- nil
+			}
+			close(r.events)
+		case <-ctx.Done():
+		}
+	}()
+	defer func() { cancel(); <-joined }()
+	if exit, err := a.interrupt(); err != nil || exit || a.runtime != nil || !strings.Contains(out.String(), "Stopped.") {
+		t.Fatalf("queued input was mistaken for idle: %v, %v", exit, err)
+	}
+}
+
+func TestDurableInputAckCannotExposeEarlierIdleState(t *testing.T) {
+	var out strings.Builder
+	r := &runtime{idle: true, pendingInputs: 1}
+	a := &application{runtime: r, display: newDisplay(&out, func(string) string { return "" })}
+	input := newInput(inbox.InputExternal, "new work")
+	item := sessionstore.Item{Kind: sessionstore.ItemInput, Data: input}
+	if err := a.event(event{item: &item}); err != nil {
+		t.Fatal(err)
+	}
+	if r.pendingInputs != 0 || r.idle {
+		t.Fatal("ack exposed stale idle before scheduling the new input")
 	}
 }

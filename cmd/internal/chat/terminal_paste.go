@@ -147,6 +147,17 @@ func (u *terminalUI) expandedSize(text string) int {
 func (u *terminalUI) readLine() (line, error) {
 	for {
 		text, err := u.editor.ReadLine()
+		if errors.Is(err, errInputInterrupt) {
+			cleared, clearErr := u.editor.ClearDraft()
+			if clearErr != nil {
+				return line{}, clearErr
+			}
+			cleared = cleared || u.rejected != ""
+			u.rejected = ""
+			u.pasted = nil
+			u.pruneAttachments()
+			return line{interrupt: true, cleared: cleared}, nil
+		}
 		if err != nil {
 			var selected *lineeditor.Selection
 			if errors.As(err, &selected) {

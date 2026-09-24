@@ -291,10 +291,8 @@ func TestTTYEditingDuringEventsResizePasteAndStop(t *testing.T) {
 	}
 	time.Sleep(600 * time.Millisecond)
 	// The insertion must still occur before B, after async messages, per-command
-	// animation frames, wrapping and a width change. Ctrl-C retains that draft.
-	cli.send("Ж\x03")
-	cli.wait("Stopped. Send a new message")
-	cli.send("\r")
+	// animation frames, wrapping and a width change.
+	cli.send("Ж\r")
 	body := request()
 	want := strings.TrimSuffix(draft, "BC") + pastedCode + "ЖBC"
 	if lastUserText(t, body) != want {
@@ -501,12 +499,13 @@ func TestTTYFaithfulPastesAndLimits(t *testing.T) {
 	paste(code)
 	cli.send("suffix\r")
 	request("prefix " + code + "suffixX")
-	// Ctrl-C stops the agent but retains both folded bytes and cursor position.
+	// Ctrl-C clears the entire folded draft without submitting its bytes.
 	paste(code)
 	cli.send("\x03")
-	cli.wait("Stopped. Send a new message")
+	cli.wait("Draft cleared.")
+	noRequest()
 	cli.send("trailing constraint\r")
-	request(code + "trailing constraint")
+	request("trailing constraint")
 	// At least 1 MiB is supported as one paste, without a lost tail sentinel.
 	maximum := strings.Repeat("x", 1024*1024-4) + "-END"
 	paste(maximum)

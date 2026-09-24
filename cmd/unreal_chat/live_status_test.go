@@ -246,10 +246,17 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 	responses <- []any{messageOutput("success received")}
 	cli.wait("success received")
 	cli.send("\x03")
+	cli.wait("Draft cleared.")
+	check()
+	screen.draft(t, "", 0)
+	if !strings.Contains(screen.text(), "running") {
+		t.Fatal("clearing a draft stopped the remaining tool")
+	}
+	cli.send("\x03")
 	cli.wait("Stopped.")
 	time.Sleep(250 * time.Millisecond)
 	check()
-	screen.draft(t, draft, 2)
+	screen.draft(t, "", 0)
 	if strings.Contains(screen.text(), "running") || strings.Contains(screen.text(), "model / input") {
 		t.Fatalf("not idle:\n%s", screen.text())
 	}
@@ -270,7 +277,7 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 		}
 	}
 	cli.send("Ж\r")
-	if got := lastUserText(t, request()); got != strings.TrimSuffix(draft, "BC")+"ЖBC" {
+	if got := lastUserText(t, request()); got != "Ж" {
 		t.Fatalf("cursor/input changed: %q", got)
 	}
 	responses <- []any{messageOutput("draft received")}

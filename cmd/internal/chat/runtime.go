@@ -23,11 +23,17 @@ import (
 )
 
 type event struct {
+	idle *bool
 	item *sessionstore.Item
 	op   *operation.Operation
 }
 
 type runtime struct {
+	// Application-owned projection of coordinator idle notifications. A newly
+	// started runtime is conservatively busy until its first notification.
+	idle          bool
+	pendingInputs int // Submitted here but not yet observed as durable inputs.
+
 	inputs     *inbox.Inbox
 	operations *operation.LocalOperationManager
 	cancel     context.CancelFunc
@@ -103,7 +109,8 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 		builder.AddTool(definition.Tool)
 	}
 	current := coordinator.New(coordinator.Dependencies{
-		JoinModels: true, SessionID: id, Inbox: inputs, Restored: restored,
+		OnIdleChange: func(idle bool) { emit(event{idle: &idle}) },
+		JoinModels:   true, SessionID: id, Inbox: inputs, Restored: restored,
 		Sessions: observedStore{Store: store, emit: emit, logs: log}, ContextBuilder: builder,
 		LLM: adapter, Tools: registry, Operations: r.operations,
 	})

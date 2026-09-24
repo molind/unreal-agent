@@ -27,7 +27,9 @@ const help = `Enter a complete line to send a message (also while work is runnin
 Terminal: arrows/Ctrl-B/F move; Home/End or Ctrl-A/E; Backspace/Delete;
 Ctrl-U/K clear before/after cursor; Ctrl-W deletes a word; Up/Down or Ctrl-P/N
 recall this run’s input history. Ctrl-D on an empty draft exits.
-Ctrl-C stops work, not the chat, retaining your draft. Short printable paste
+Ctrl-C: clear a nonempty draft first (including paste); with an empty draft,
+stop active work; if already idle, exit. /stop always stops without exiting.
+Short printable paste
 (up to 160 characters, one line) inserts editable text. Longer/multiline paste
 folds into a ▣ block (exact bytes, including newlines/tabs). Only Enter submits.
 Only the listed single-line /commands are interpreted (typed or pasted, with
@@ -44,7 +46,8 @@ NO_COLOR disables styling, not editing/layout. Pipes remain plain Markdown.
 Command and diagnostic log paths are shown at startup and /status.
 Startup and /new stay UNSAVED until the first actual user message.
 /resume opens a recent-first chooser: Up/Down move, Enter resumes, Esc cancels.
-Opening/canceling does not stop work; Ctrl-C still stops work, EOF exits.
+Opening/canceling does not stop work. Ctrl-C in the chooser stops active work
+or exits when idle; Esc dismisses just the chooser. EOF exits.
 Without a capable terminal, /resume lists IDs with exact-ID instructions.
 Startup never auto-resumes; -session ID is explicit. /resume never
 substitutes another ID. Tools run with your local permissions.

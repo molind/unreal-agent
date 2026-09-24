@@ -19,7 +19,7 @@ func editTerminal(t *testing.T, keys string) ([]line, string, *terminalUI) {
 	}
 	defer r.Close()
 	var out bytes.Buffer
-	u := &terminalUI{input: r, output: &out, interrupt: make(chan os.Signal, 1), failures: make(chan error, 1)}
+	u := &terminalUI{input: r, output: &out, failures: make(chan error, 1)}
 	u.initEditor()
 	written := make(chan error, 1)
 	go func() { _, err := io.WriteString(w, keys); _ = w.Close(); written <- err }()
@@ -115,22 +115,31 @@ func TestTerminalLimitsRejectWholeDraft(t *testing.T) {
 }
 func TestTerminalPasteControlsAndCancellation(t *testing.T) {
 	payload := "\tAPI_KEY=private\n\x1b[2J\x1b\x1b[A\x03\x00\r\n-end"
-	got, out, u := editTerminal(t, "before\x1b\x03"+bracketed(payload)+"\x03after\r")
-	if len(got) != 1 || got[0].text != "before"+payload+"after" || !got[0].literal {
-		t.Fatal("paste/draft changed by controls")
+	got, out, u := editTerminal(t, bracketed(payload)+"\r"+"before\x1b\x03"+bracketed(payload)+"\x03after\r")
+	if len(got) != 4 || got[0].text != payload || !got[0].literal || got[1] != (line{interrupt: true, cleared: true}) || got[2] != (line{interrupt: true, cleared: true}) || got[3].text != "after" {
+		t.Fatalf("paste/interrupt behavior: %#v", got)
 	}
 	if strings.Contains(out, "private") || strings.Contains(out, "\x1b[2J") {
 		t.Fatal("paste contents executed/echoed")
 	}
-	select {
-	case <-u.interrupt:
-	default:
-		t.Fatal("Ctrl-C lost")
-	}
-	if u.history.Len() != 1 {
-		t.Fatal("missing history")
+	if u.history.Len() != 2 {
+		t.Fatal("cleared input was remembered")
 	}
 }
+
+func TestTerminalInterruptClearsDraftAndPreservesKeyOrder(t *testing.T) {
+	for _, draft := range []string{"беларускі draft", "   ", bracketed("/tmp/short-path"), "before" + bracketed("line one\nline two") + "after", strings.Repeat("x", maxEditorRunes+1), "\xd0"} {
+		got, _, _ := editTerminal(t, draft+"\x03\x03fresh\r")
+		if len(got) != 3 || got[0] != (line{interrupt: true, cleared: true}) || got[1] != (line{interrupt: true}) || got[2].text != "fresh" {
+			t.Fatalf("interrupts lost, coalesced, or retained the draft: %#v", got)
+		}
+	}
+	got, _, u := editTerminal(t, bracketed("saved\nblock")+"\r"+bracketed("discarded\nblock")+"\x03\x1b[A\r")
+	if len(got) != 3 || got[0].text != "saved\nblock" || got[2].text != got[0].text || len(u.attachments) != 1 {
+		t.Fatal("clearing a draft damaged submitted history or retained its attachment")
+	}
+}
+
 func TestTerminalAttachmentsExpireWithLibraryHistory(t *testing.T) {
 	_, _, u := editTerminal(t, bracketed("original\n\tblock")+"\r"+strings.Repeat("next\r", 100))
 	if u.history.Len() != 100 || len(u.attachments) != 0 {
