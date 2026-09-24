@@ -2,6 +2,7 @@
 
 build:
 	go build -trimpath -o bin/unreal-agent-runner ./cmd/unreal-agent-runner
+	go build -trimpath -o bin/unreal_chat ./cmd/unreal_chat
 
 test:
 	go test -race ./...

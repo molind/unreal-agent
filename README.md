@@ -6,6 +6,13 @@ An async-first agent harness from Unreal Labs.
 - [cmd/](cmd/) — executables that use the library.
 - [benchmarks/](benchmarks/) — benchmark runners.
 
+## Interactive coding chat
+
+Build both executables with `make build`, then run `./bin/unreal_chat [workspace]`
+(or `go run ./cmd/unreal_chat`). See the [chat README](cmd/unreal_chat/README.md)
+for authentication, flags, session commands, and local-execution safety limits.
+The existing `unreal-agent-runner` remains the one-shot JSONL interface.
+
 ## Glossary
 
 - **Input**: an event with a caller-supplied globally unique ID that remains
