@@ -25,8 +25,9 @@ const help = `Enter a complete line to send a message (also while work is runnin
 /stop          Stop all current work; keep history; no automatic retry
 /exit, /quit   Stop work and exit (EOF also exits)
 Terminal: arrows/Ctrl-B/F move; Home/End or Ctrl-A/E; Backspace/Delete;
-Ctrl-U/K clear before/after cursor; Ctrl-W deletes a word; Up/Down or Ctrl-P/N
-recall this run’s input history. Ctrl-D on an empty draft exits.
+Ctrl-U/K clear before/after cursor; Ctrl-W deletes a word;
+Option/Alt-Left/Right move by word; Up/Down or Ctrl-P/N recall input history.
+Ctrl-D on an empty draft exits.
 Ctrl-C: clear a nonempty draft first (including paste); with an empty draft,
 stop active work; if already idle, exit. /stop always stops without exiting.
 Short printable paste

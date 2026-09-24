@@ -65,9 +65,12 @@ command descriptions, not raw tool output or JSONL.
 On capable terminals replies use a neutral foreground and spaced conversation
 blocks. CommonMark headings, bold/italic emphasis, lists, quotes, visible links,
 and code blocks are rendered using the goldmark parser. Prose wraps at words
-(to at most 100 columns); code keeps its indentation and line breaks, with tabs
-expanded for display only. No syntax highlighter, HTML execution, external image
-fetching, or hidden OSC links are used. Canonical history/model context is unchanged.
+(to at most 100 columns). Replies start at the left edge, without artificial
+leading spaces. Code rows have no decorative left border or list/quote prefix,
+so selecting them copies only the code's own indentation and text. Language
+headings and top/bottom borders remain outside the code rows. Code keeps its
+indentation and line breaks, with tabs expanded for display only. No syntax
+highlighter, HTML execution, external image fetching, or hidden OSC links are used. Canonical history/model context is unchanged.
 
 An animated vertical list shows model/input-pending activity plus one row per
 running/canceling operation, with a short ID, command label, state, and elapsed
@@ -94,7 +97,11 @@ On a TTY with `TERM` set (not `dumb`), a locally extended `golang.org/x/term` li
 
 - Left/Right or Ctrl-B/F: move; Home/End or Ctrl-A/E: start/end.
 - Backspace/Delete: delete; Ctrl-U/K: clear before/after the cursor;
-  Ctrl-W: delete the preceding word; Alt-Left/Right: move by word.
+  Ctrl-W: delete the preceding word; **Option/Alt-Left/Right: move by word**
+  (to the previous/next space-separated word start). Meta-b/f (`ESC b` /
+  `ESC f` sequences) and Alt/Meta-modified CSI arrows are recognized, including
+  the usual macOS terminal mappings. Terminal shortcuts must be configured to send these
+  keys to the application rather than intercept them locally.
 - Up/Down or Ctrl-P/N: recall the last 100 submitted lines **in this process**.
   This editing history is not a separate persistent input log.
 - Ctrl-C follows the current state, not a timed double-press counter:

@@ -223,6 +223,17 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 		return keyEscape, b[2:]
 	}
 
+	// macOS terminals commonly encode Option+Left/Right as Meta-b/f;
+	// recognize these before the generic unknown-escape handler consumes them.
+	if !pasteActive && len(b) >= 2 && b[0] == keyEscape {
+		switch b[1] {
+		case 'b':
+			return keyAltLeft, b[2:]
+		case 'f':
+			return keyAltRight, b[2:]
+		}
+	}
+
 	if b[0] != keyEscape {
 		if !utf8.FullRune(b) {
 			return utf8.RuneError, b
@@ -252,7 +263,7 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 		return keyDelete, b[4:]
 	}
 
-	if !pasteActive && len(b) >= 6 && b[0] == keyEscape && b[1] == '[' && b[2] == '1' && b[3] == ';' && b[4] == '3' {
+	if !pasteActive && len(b) >= 6 && b[0] == keyEscape && b[1] == '[' && b[2] == '1' && b[3] == ';' && (b[4] == '3' || b[4] == '9') {
 		switch b[5] {
 		case 'C':
 			return keyAltRight, b[6:]

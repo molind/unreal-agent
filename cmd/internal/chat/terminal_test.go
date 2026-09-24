@@ -210,3 +210,22 @@ func TestTerminalPasteThresholdAndSafeFolding(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalOptionWordMotion(t *testing.T) {
+	for _, keys := range [][2]string{{"\x1bb", "\x1bf"}, {"\x1b[1;3D", "\x1b[1;3C"}, {"\x1b[1;9D", "\x1b[1;9C"}} {
+		got, _, _ := editTerminal(t, "адзін два тры"+keys[0]+keys[0]+"X"+keys[1]+"Y\r")
+		if len(got) != 1 || got[0].text != "адзін Xдва Yтры" {
+			t.Fatalf("word motion did not pass through the input transport: %#v", got)
+		}
+		payload := "literal" + keys[0] + keys[1]
+		got, _, _ = editTerminal(t, bracketed(payload)+"\r")
+		if len(got) != 1 || got[0].text != payload || !got[0].literal {
+			t.Fatal("Option sequences in pasted text were interpreted as keys")
+		}
+		payload = "folded\nblock"
+		got, _, _ = editTerminal(t, "before "+bracketed(payload)+" after"+keys[0]+keys[0]+"X"+keys[1]+"Y\r")
+		if len(got) != 1 || got[0].text != "before X"+payload+" Yafter" {
+			t.Fatal("word motion damaged a folded paste")
+		}
+	}
+}

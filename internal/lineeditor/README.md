@@ -17,8 +17,9 @@ clipped by width, and an overflow row reserves access to `/status`. Growing draf
 shrink/hide status before it can scroll into history. Erase clears the entire
 editable tail (the prior chat transport did this substitution). Resize uses the
 physical origin of explicit-CRLF rows instead of the upstream doubled-row shrink
-heuristic. Editing, key parsing, paste callback, history, and serialization remain
-upstream-owned. Compare against the pinned module source when updating x/term.
+heuristic. Editing, paste callback, history, and serialization remain upstream-owned.
+Key decoding additionally recognizes Meta-b/f and Meta-modified CSI arrows
+alongside upstream's Alt arrows, all routed to the existing word-motion handlers. Compare against the pinned module source when updating x/term.
 
 As upstream, editable Unicode uses one cell per rune: Cyrillic works; wide and
 combining input is not fully supported. Status callers supply printable ASCII.

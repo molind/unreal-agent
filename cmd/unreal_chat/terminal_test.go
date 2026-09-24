@@ -545,7 +545,7 @@ func (c *ttyCLI) resize(rows, cols uint16) error {
 func TestTTYReadableTranscriptAndInlinePaste(t *testing.T) {
 	for _, noColor := range []bool{false, true} {
 		t.Run(fmt.Sprint(noColor), func(t *testing.T) {
-			markdown := "## Summary\n\n**Ready** for `go test`.\n\n- first result\n- second result\n\n```sh\nprintf '**literal**'\n```\n\nMarkdown done."
+			markdown := "## Summary\n\n**Ready** for `go test`.\n\n- first result\n- second result\n\n```sh\nif true; then\n    printf '**literal**'\nfi\n```\n\nMarkdown done."
 			requests := make(chan string, 4)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
@@ -572,6 +572,19 @@ func TestTTYReadableTranscriptAndInlinePaste(t *testing.T) {
 			for _, want := range []string{"Summary", "Ready", "• first result", "╭─ sh", "printf '**literal**'", "gpt-6-astra / xhigh"} {
 				if !strings.Contains(s.text(), want) {
 					t.Fatalf("missing formatted content %q:\n%s", want, s.text())
+				}
+			}
+			// These are the actual terminal cells a mouse selection will copy,
+			// not just the source bytes before the editor has rendered them.
+			for _, want := range []string{"Assistant", "Summary", "if true; then", "    printf '**literal**'", "fi"} {
+				found := false
+				for _, row := range strings.Split(s.text(), "\n") {
+					if row == want {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("copyable row %q has a gutter or altered indentation:\n%s", want, s.text())
 				}
 			}
 			for _, raw := range []string{"## Summary", "**Ready**", "```", "assistant>"} {

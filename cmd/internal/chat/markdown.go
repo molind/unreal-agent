@@ -25,7 +25,7 @@ type markdownView struct {
 func (d *display) markdown(body string) string {
 	v := markdownView{source: []byte(d.safe(body)), width: min(100, d.columns()-1), color: d.color, safe: d.safe}
 	root := goldmark.DefaultParser().Parse(text.NewReader(v.source))
-	return strings.TrimRight(v.blocks(root, "  "), "\n") + "\n"
+	return strings.TrimRight(v.blocks(root, ""), "\n") + "\n"
 }
 
 func paint(color bool, style, value string) string {
@@ -179,9 +179,11 @@ func (v markdownView) code(source []byte, language, prefix string) string {
 	var out strings.Builder
 	out.WriteString(prefix + paint(v.color, "2", "╭─ "+language) + "\n")
 	for _, line := range strings.Split(strings.TrimSuffix(v.safe(string(source)), "\n"), "\n") {
-		// Do not reflow source code or interpret its Markdown/HTML. Tabs are
+		// Code rows carry only source indentation, never a decorative gutter
+		// or the parent list/quote prefix. Keep nesting on the heading/footer
+		// so selecting the code itself does not copy UI characters. Tabs are
 		// expanded only in the view; canonical history is never modified.
-		out.WriteString(prefix + paint(v.color, "2", "│ ") + strings.ReplaceAll(line, "\t", "    ") + "\n")
+		out.WriteString(strings.ReplaceAll(line, "\t", "    ") + "\n")
 	}
 	out.WriteString(prefix + paint(v.color, "2", "╰─") + "\n\n")
 	return out.String()

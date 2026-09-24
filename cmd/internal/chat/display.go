@@ -235,7 +235,7 @@ func (d *display) message(role, body string) error {
 	if role == "you" {
 		return d.write("\n" + paint(d.color, "1;36", "you> ") + d.safe(body) + "\n\n")
 	}
-	return d.write("\n" + paint(d.color, "2", "  Assistant") + "\n" + d.markdown(body) + "\n")
+	return d.write("\n" + paint(d.color, "2", "Assistant") + "\n" + d.markdown(body) + "\n")
 }
 
 func (d *display) status() error {

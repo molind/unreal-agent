@@ -25,7 +25,7 @@ func TestMarkdownConversation(t *testing.T) {
 			}
 			output := out.String()
 			plain := terminalStyle.ReplaceAllString(output, "")
-			for _, want := range []string{"  Assistant\n", "  Вынік\n\n", "Звычайны важны тэкст", "• першы", "• другі", "3. праверка", "4. зборка", "│ цытата", "╭─ go", "│     println(\"**literal**\")", "│ \n", "╰─", "дакументацыя (https://example.org/docs)"} {
+			for _, want := range []string{"Assistant\n", "Вынік\n\n", "Звычайны важны тэкст", "• першы", "• другі", "3. праверка", "4. зборка", "│ цытата", "╭─ go", "    println(\"**literal**\")\n\nnext()\n", "╰─", "дакументацыя (https://example.org/docs)"} {
 				if !strings.Contains(plain, want) {
 					t.Errorf("missing %q:\n%s", want, plain)
 				}
@@ -87,7 +87,7 @@ func TestMarkdownWrapAndSourcePreservation(t *testing.T) {
 	body := "**Адзін два тры чатыры пяць шэсць сем восем дзевяць**.\n\n```\n  abcdefghijklmnopqrstuvwxyz\n```"
 	got := d.markdown(body)
 	plain := terminalStyle.ReplaceAllString(got, "")
-	if !strings.Contains(plain, "│   abcdefghijklmnopqrstuvwxyz") {
+	if !strings.Contains(plain, "\n  abcdefghijklmnopqrstuvwxyz\n") {
 		t.Fatal("code was reflowed or truncated")
 	}
 	prose := strings.Split(plain, "╭─")[0]
@@ -137,4 +137,45 @@ func FuzzMarkdownTerminalSafety(f *testing.F) {
 			t.Fatalf("unsafe output: %q", output)
 		}
 	})
+}
+
+func TestMarkdownCopyHasNoDecorativeIndentation(t *testing.T) {
+	for _, color := range []bool{false, true} {
+		t.Run(fmt.Sprint(color), func(t *testing.T) {
+			var out bytes.Buffer
+			d := newDisplay(&out, func(string) string { return "" })
+			d.ui, d.color = &terminalUI{width: 32}, color
+			if err := d.message("assistant", "## Загаловак\n\n"+strings.Repeat("тэкст для капіравання ", 8)); err != nil {
+				t.Fatal(err)
+			}
+			plain := terminalStyle.ReplaceAllString(out.String(), "")
+			for _, line := range strings.Split(plain, "\n") {
+				if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+					t.Fatalf("decorative whitespace in copied prose/header: %q", line)
+				}
+			}
+			code := "if ready:\n    first()\n\n    second()\n"
+			for _, body := range []string{
+				"```py\n" + code + "```",
+				"- Example:\n\n  ```py\n  if ready:\n      first()\n\n      second()\n  ```",
+				"> ```py\n> if ready:\n>     first()\n>\n>     second()\n> ```",
+			} {
+				plain := terminalStyle.ReplaceAllString(d.markdown(body), "")
+				_, after, ok := strings.Cut(plain, "╭─ py\n")
+				if !ok {
+					t.Fatal("missing code heading")
+				}
+				var copied strings.Builder
+				for _, line := range strings.Split(after, "\n") {
+					if strings.Contains(line, "╰─") {
+						break
+					}
+					copied.WriteString(line + "\n")
+				}
+				if copied.String() != code {
+					t.Fatalf("code selection changed indentation/content: got %q, want %q", copied.String(), code)
+				}
+			}
+		})
+	}
 }
