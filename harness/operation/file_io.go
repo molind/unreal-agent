@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 	"golang.org/x/sys/unix"
 )
 
@@ -164,9 +165,28 @@ func bindRevision(root *os.Root, path, hash string) (string, error) {
 	return "", fmt.Errorf("cannot allocate file revision")
 }
 func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
+	return executeFileStored(ctx, id, in, nil)
+}
+func executeFileStored(ctx context.Context, id ID, in FileInput, db *storage.DB) (FileResult, error) {
+	if storage.IsReference(in.Path) {
+		return readArtifact(ctx, in, db)
+	}
 	result := FileResult{Path: in.Path}
 	if err := ctx.Err(); err != nil {
 		return result, err
+	}
+	// Historical tool results retain their original paths so compaction hashes
+	// remain valid. A removed, imported capture is still readable via its alias.
+	if db != nil && in.Action == "Read" {
+		if _, err := os.Lstat(in.Path); errors.Is(err, os.ErrNotExist) {
+			ref := storage.Reference(in.Path)
+			if _, _, err := db.Read(ctx, ref, 0, 0); err == nil {
+				in.Path = ref
+				return readArtifact(ctx, in, db)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return result, err
+			}
+		}
 	}
 	// Split without filepath.Clean: preserve symlink/.. filesystem semantics.
 	split := strings.LastIndexByte(in.Path, '/')
@@ -184,15 +204,11 @@ func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
 		return result, err
 	}
 	defer root.Close()
-	revisionsDir := filepath.Join(in.BaseDirectory, "revisions")
-	if err := os.MkdirAll(revisionsDir, 0700); err != nil {
-		return result, err
-	}
-	revisions, err := os.OpenRoot(revisionsDir)
+	metadata, err := openFileMetadata(db, in.BaseDirectory)
 	if err != nil {
 		return result, err
 	}
-	defer revisions.Close()
+	defer metadata.close()
 	if in.Action == "Read" {
 		f, err := openRegular(root, name, false)
 		if err != nil {
@@ -206,7 +222,7 @@ func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		result.Revision, err = bindRevision(revisions, canonical, fileHash(data))
+		result.Revision, err = metadata.bind(canonical, fileHash(data))
 		if err != nil {
 			return result, err
 		}
@@ -233,27 +249,15 @@ func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
 	if string(id) == "" || strings.Trim(string(id), "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != "" {
 		return result, fmt.Errorf("invalid file operation ID")
 	}
-	opDir := filepath.Join(in.BaseDirectory, string(id))
-	if err := os.MkdirAll(opDir, 0700); err != nil {
-		return result, err
-	}
-	journal, err := os.OpenRoot(opDir)
+	journal, err := metadata.journal(ctx, string(id))
 	if err != nil {
 		return result, err
 	}
-	defer journal.Close()
-	guard, err := journal.OpenFile("lock", os.O_RDWR|os.O_CREATE|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0600)
-	if err != nil {
-		return result, err
-	}
-	defer guard.Close()
-	if err := lockFile(ctx, guard); err != nil {
-		return result, err
-	}
+	defer journal.close()
 	encoded, _ := json.Marshal(in, json.Deterministic(true))
 	inputHash := fileHash(encoded)
 	var receipt fileReceipt
-	err = readPrivateJSON(journal, "transaction.json", &receipt)
+	err = journal.readReceipt(&receipt)
 	if err == nil {
 		if receipt.Version != 1 || receipt.InputHash != inputHash {
 			return result, fmt.Errorf("file operation receipt does not match request")
@@ -271,7 +275,7 @@ func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
 				receipt.Complete = true
 				receipt.Result.Applied = true
 				receipt.Result.Recovered = true
-				if err := privateJSON(journal, "transaction.json", receipt); err != nil {
+				if err := journal.writeReceipt(receipt); err != nil {
 					return result, err
 				}
 				return receipt.Result, nil
@@ -285,7 +289,7 @@ func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
 	expected := "missing"
 	if in.Revision != "missing" {
 		var revision fileRevision
-		if err := readPrivateJSON(revisions, in.Revision+".json", &revision); err != nil {
+		if err := metadata.readRevision(in.Revision, &revision); err != nil {
 			return result, fmt.Errorf("unknown revision; Read the file first: %w", err)
 		}
 		if revision.Version != 1 || revision.Path != canonical || len(revision.SHA256) != 64 {
@@ -349,27 +353,18 @@ func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
 	if !result.Created && after == string(before) {
 		return result, fmt.Errorf("replacement would not change the file")
 	}
-	result.Revision, err = bindRevision(revisions, canonical, fileHash([]byte(after)))
+	result.Revision, err = metadata.bind(canonical, fileHash([]byte(after)))
 	if err != nil {
 		return result, err
 	}
 	diff := fileDiff(in.Path, string(before), after, result.Created)
 	result.Diff, result.Truncated = BoundOutput(diff, FilePreviewLimit)
-	result.DiffPath = filepath.Join(opDir, "change.diff")
-	capture, err := journal.OpenFile("change.diff", os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
-	if err != nil {
-		return result, err
-	}
-	_, err = io.WriteString(capture, diff)
-	if err == nil {
-		err = capture.Sync()
-	}
-	err = errors.Join(err, capture.Close())
+	result.DiffPath, err = journal.writeDiff(diff)
 	if err != nil {
 		return result, err
 	}
 	receipt = fileReceipt{Version: 1, InputHash: inputHash, Before: expected, After: fileHash([]byte(after)), Result: result}
-	if err := privateJSON(journal, "transaction.json", receipt); err != nil {
+	if err := journal.writeReceipt(receipt); err != nil {
 		return result, err
 	}
 	tmp := ".unreal-edit-" + randomFileToken()
@@ -419,7 +414,7 @@ func executeFile(ctx context.Context, id ID, in FileInput) (FileResult, error) {
 		return result, fmt.Errorf("file replaced but directory sync failed; inspect before retrying: %w", err)
 	}
 	receipt.Complete = true
-	if err := privateJSON(journal, "transaction.json", receipt); err != nil {
+	if err := journal.writeReceipt(receipt); err != nil {
 		return result, fmt.Errorf("file replaced but receipt failed; inspect before retrying: %w", err)
 	}
 	return result, nil

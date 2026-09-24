@@ -3,6 +3,7 @@
 build:
 	go build -trimpath -o bin/unreal-agent-runner ./cmd/unreal-agent-runner
 	go build -trimpath -o bin/unreal_chat ./cmd/unreal_chat
+	go build -trimpath -o bin/unreal-storage ./cmd/unreal-storage
 
 test:
 	go test -race ./...

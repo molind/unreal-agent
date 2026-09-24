@@ -9,6 +9,7 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
@@ -75,7 +76,7 @@ func (t *translator) Translate(ctx tool.Context, call llm.ToolCall) tool.CallSta
 	if strings.TrimSpace(in.Path) == "" {
 		return tool.ErrorStatus("path must be nonempty", operation.DefaultMaxOutputLength)
 	}
-	if !filepath.IsAbs(in.Path) {
+	if !filepath.IsAbs(in.Path) && !storage.IsReference(in.Path) {
 		in.Path = t.config.Directory + string(filepath.Separator) + in.Path
 	}
 	spec, err := operation.NewFileSpec(in)

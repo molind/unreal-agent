@@ -18,6 +18,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 )
 
 type logRecord struct {
@@ -41,6 +42,8 @@ type logRecord struct {
 // App, coordinator and provider goroutines share this writer. No request,
 // response, auth object, reasoning, or frame is ever passed to it.
 type logs struct {
+	database              *storage.DB
+	run                   string
 	mu                    sync.Mutex
 	directory, diagnostic string
 	file                  *os.File
@@ -78,6 +81,10 @@ func (l *logs) write(f *os.File, r logRecord) error {
 	if err != nil {
 		return err
 	}
+	if l.database != nil {
+		_, err = l.database.Exec("INSERT INTO diagnostics(session,operation,run,payload) VALUES(?,?,?,?)", r.Session, r.Operation, l.run, b)
+		return err
+	}
 	_, err = f.Write(append(b, 10))
 	return err
 }
@@ -99,6 +106,9 @@ func (l *logs) event(stage, event string, id session.ID, op operation.ID, err er
 	return l.write(l.file, r)
 }
 func (l *logs) command(id session.ID, op operation.Operation) error {
+	if l != nil && l.database != nil {
+		return l.databaseCommand(id, op)
+	}
 	if l != nil && op.Type == operation.TypeFile {
 		return l.fileOperation(id, op)
 	}

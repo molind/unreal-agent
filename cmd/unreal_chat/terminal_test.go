@@ -94,6 +94,8 @@ type ttyCLI struct {
 
 func startTTY(t *testing.T, env []string, args ...string) *ttyCLI {
 	t.Helper()
+	// These fixtures intentionally exercise legacy JSONL replay and picker races.
+	args = append([]string{"-storage-format", "jsonl"}, args...)
 	ctx, cancel := context.WithTimeout(t.Context(), 35*time.Second)
 	binary := filepath.Join(t.TempDir(), "unreal_chat")
 	if out, err := exec.CommandContext(ctx, "go", "build", "-o", binary, ".").CombinedOutput(); err != nil {

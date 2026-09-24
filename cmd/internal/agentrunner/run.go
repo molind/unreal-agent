@@ -27,6 +27,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore/localfile"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
 	"github.com/unreallabsai/unreal-agent/harness/tool/files"
@@ -169,7 +170,8 @@ func Run(
 		prompt = &value
 		return nil
 	})
-	sessionDirectory := flags.String("session-directory", "", "directory containing session files; defaults to $XDG_STATE_HOME/unreal-agent/sessions, or $HOME/.local/state/unreal-agent/sessions")
+	sessionDirectory := flags.String("session-directory", "", "directory containing session files; JSONL defaults to $XDG_STATE_HOME/unreal-agent/sessions, or $HOME/.local/state/unreal-agent/sessions; SQLite uses an XDG workspace directory")
+	storageFormat := flags.String("storage-format", "jsonl", "jsonl (runner compatibility default) or sqlite")
 	workspaceDirectory := flags.String("workspace", ".", "agent workspace and Bash working directory")
 	logDirectory := flags.String("log-directory", "", "optional session JSONL log directory; unset writes only to stdout")
 	toolHeartbeatInterval := flags.Duration("tool-heartbeat-interval", 10*time.Minute, "tool-wait heartbeat interval (0 disables)")
@@ -289,12 +291,53 @@ func Run(
 	if err != nil {
 		return fmt.Errorf("resolve session directory: %w", err)
 	}
-	store, err := localfile.New(storeDirectory)
+	if *storageFormat != "jsonl" && *storageFormat != "sqlite" {
+		return errors.New("storage-format must be jsonl or sqlite")
+	}
+	var store *localfile.Store
+	if *storageFormat == "sqlite" {
+		if strings.TrimSpace(*sessionDirectory) == "" {
+			storeDirectory, err = storage.Directory(workspace, getenv)
+			if err != nil {
+				return err
+			}
+		}
+		store, err = localfile.NewSQLite(storeDirectory)
+	} else {
+		store, err = localfile.New(storeDirectory)
+	}
 	if err != nil {
 		return fmt.Errorf("open session store: %w", err)
 	}
+	defer func() { runErr = errors.Join(runErr, store.Close()) }()
+	if store.Database() != nil {
+		release, err := store.Database().LockWriter()
+		if err != nil {
+			return err
+		}
+		defer release()
+		if err := store.Database().BindWorkspace(ctx, workspace); err != nil {
+			return err
+		}
+		legacy, err := filepath.Glob(filepath.Join(storeDirectory, "*.session.jsonl"))
+		if err != nil {
+			return err
+		}
+		for _, path := range legacy {
+			var n int
+			if err := store.Database().QueryRow("SELECT count(*) FROM imports WHERE source=?", path).Scan(&n); err != nil {
+				return err
+			}
+			if n == 0 {
+				return fmt.Errorf("legacy history found; stop legacy writers and run unreal-storage migrate %q first", storeDirectory)
+			}
+		}
+	}
 	sessionID, restored, err := openSession(ctx, store, parsed.SessionID)
 	if err != nil {
+		return err
+	}
+	if err := store.CleanupCaptures(ctx, sessionID); err != nil {
 		return err
 	}
 	observedOutput := output
@@ -332,6 +375,7 @@ func Run(
 		Translators: tool.StaticTranslators{
 			Read: files.NewRead(fileConfig), Edit: files.NewEdit(fileConfig), Write: files.NewWrite(fileConfig),
 			Bash: bash.New(bash.Config{
+				Artifacts:     store.Database() != nil,
 				Shell:         shell,
 				Directory:     workspace,
 				BaseDirectory: operationDirectory,
@@ -363,7 +407,7 @@ func Run(
 		}
 	}
 
-	operations := operation.NewLocalOperationManager(runContext, configuredTools.RemoteJobs...)
+	operations := operation.NewLocalOperationManagerWithStorage(runContext, store.Database(), configuredTools.RemoteJobs...)
 	inputs, err := inbox.New(runContext, restored.ExternalInputIDs)
 	if err != nil {
 		return fmt.Errorf("open inbox: %w", err)

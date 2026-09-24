@@ -17,6 +17,9 @@ func (store *Store) ListSessions(ctx context.Context) ([]sessionstore.SessionInf
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
+	if store.database != nil {
+		return store.sqlList(ctx)
+	}
 	entries, err := os.ReadDir(store.directory)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)

@@ -154,7 +154,9 @@ func TestTruncatedOutputCanBeReadFromCaptureFiles(t *testing.T) {
 				t.Fatalf("status = %#v", status)
 			}
 			spec := submitted.specs[0]
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			// This checks capture fidelity, not a latency budget. Real fsyncs can
+			// exceed five seconds while the full race suite contends for the disk.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			manager := operation.NewLocalOperationManager(ctx)
 			if err := manager.Add(operation.Operation{ID: status.WaitingFor[0], Type: spec.Type, Version: spec.Version, Status: operation.StatusReady, MaxOutputLength: spec.MaxOutputLength, State: spec.State}); err != nil {

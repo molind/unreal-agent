@@ -34,9 +34,10 @@ const (
 )
 
 type ShellInput struct {
-	Command   string
-	Shell     string
-	Directory string
+	ArtifactReferences bool `json:",omitzero"` // Persist rendering mode for stable replay/compaction hashes.
+	Command            string
+	Shell              string
+	Directory          string
 }
 
 type ShellResult struct {
@@ -53,6 +54,7 @@ type ShellState struct {
 
 	Phase           ShellPhase
 	ProcessGroupID  int
+	CapturesClosed  bool `json:",omitzero"` // Joined cancellation; retain PID for audit.
 	PendingExitCode *int
 	OutSize         int64
 	ErrSize         int64
@@ -255,6 +257,8 @@ func (shell *Shell) handleAwaiting(event primitives.PrimitiveEvent) (Step, error
 		))
 	}
 	if event.Type == primitives.PrimitiveEventCanceled {
+		// The process primitive has joined its children and closed captures.
+		state.CapturesClosed = true
 		return shell.cancel()
 	}
 	if event.Type == primitives.PrimitiveEventFailed {

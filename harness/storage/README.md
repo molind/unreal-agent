@@ -1,0 +1,75 @@
+# Workspace storage
+
+`storage` owns the SQLite handle, content-addressed artifacts and private file
+metadata primitives. It does not depend on the coordinator, session, tools or
+operation packages. The existing `sessionstore/localfile` validation/replay engine
+supports two persistence backends: `New` (legacy JSONL) and `NewSQLite` (indexed
+SQLite). Both implement the same session-store interface and observer contract.
+
+## Layout and ownership
+
+One `state.sqlite3` per canonical workspace. XDG_STATE_HOME must be absolute;
+otherwise HOME/.local/state is used. The workspace directory name is SHA-256 of
+its canonical absolute path. Symlink aliases resolve to the same identity;
+moving a workspace requires an explicit migration/rebind design rather than
+silently running old operations in another directory. Explicit directories are
+bound to that same identity before a host resumes work.
+
+SQLite is pure Go (`modernc.org/sqlite`); no sqlite executable or CGo is required.
+Main database permissions are 0600, new storage directories 0700. SQLite inherits
+that mode for WAL/SHM. Only local filesystems supporting locking are supported.
+SQLite transactions use WAL, synchronous=FULL, foreign keys and a bounded busy
+timeout. Version mismatches fail instead of guessing at migrations. A workspace
+writer lock covers the whole host process, including external filesystem edits;
+SQLite transaction locks alone cannot make those edits safe. Readers and backups
+may run concurrently. This first version allows one harness writer per workspace,
+not several simultaneous chat processes in different sessions of one workspace.
+
+## Canonical history and artifacts
+
+`events` is append-only and indexed by session/event number and logical item
+sequence. `operations` contains the latest state, updated in the same transaction
+as the event. Replay reads logical items and latest projections, not every
+transient operation checkpoint. Canonical JSONL export includes all checkpoints.
+A cached writer checks its high-water mark before appending; stale writers fail
+without truncating a newer history. SQLite observers run only after commit.
+
+Large JSON strings (including encoded image bytes) are stored once and referenced
+through an explicit JSON-pointer manifest. User JSON objects cannot masquerade as
+references; numbers keep exact decimal precision. Deduplication and decompression
+are transparent to replay and the in-memory, I/O-free context builder. Bash's
+artifact-reference rendering mode is persisted with each new operation; migration
+never rewrites historical result text, preserving saved compaction prefix hashes.
+This is lossless compression, not conversation summarization.
+
+Artifacts consist of immutable 128 KiB chunks, compressed with zstd only when
+smaller, and checksummed with SHA-256. Range reads decompress only touched chunks.
+`artifact:<sha256>` addresses content; `capture:<sha256-of-original-spool-path>` is
+a stable alias that survives unlinking and database backup. Empty outputs do not
+allocate chunk rows. Large artifacts are streamed rather than loaded in full.
+
+## External effects and recovery
+
+Bash still redirects to regular durable spool files. A terminal checkpoint first
+imports closed captures, then commits the operation, then unlinks verified spools.
+The import transaction and immutable alias make retries safe; changed spools are
+never silently rebound or deleted. Captures of possibly surviving processes are
+retained. Source bytes never disappear before the database owns a complete copy.
+File-tool revisions and receipts use namespaced metadata rows; complete diffs are
+artifacts. The per-operation receipt lock remains necessary (in-memory stripes
+within a process, plus the host writer lock across processes). Filesystem edits
+still use staged-file fsync, atomic rename/create, directory fsync, and separate
+intent/completion receipts. An uncertain interrupted edit is NOT repeated.
+
+## Maintenance
+
+Use `unreal-storage backup` for a consistent standalone SQLite snapshot, including
+committed WAL contents. Do not copy just the live `.sqlite3` file. A snapshot of an
+active workspace does not include uncommitted external spool bytes or the workspace
+files themselves: stop work first for a complete portable archive.
+
+No history or artifact retention policy deletes data automatically. SQLite does
+not shrink on row deletion without maintenance; garbage collection, cross-workspace
+deduplication, FTS search and standalone single-session database export are not
+part of this first version. `history SESSION` exports a session's JSONL transcript;
+`backup FILE` includes the entire workspace database, including other sessions.

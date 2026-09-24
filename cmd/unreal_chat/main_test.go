@@ -62,7 +62,7 @@ func TestScriptedCLI(t *testing.T) {
 	workspace := t.TempDir()
 	cmd := exec.CommandContext(ctx, binary, "-provider", "openai", "-base-url", server.URL, "-model", "local-test", workspace)
 	// Do not inherit provider credentials or proxy configuration from the host.
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "OPENAI_API_KEY=local-fake-key"}
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "OPENAI_API_KEY=local-fake-key", "XDG_STATE_HOME=" + filepath.Join(workspace, "state")}
 	input, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestCLIBrokenPipeCleansShell(t *testing.T) {
 	defer server.Close()
 	workspace := t.TempDir()
 	cmd := exec.CommandContext(ctx, binary, "-provider", "openai", "-base-url", server.URL, workspace)
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "OPENAI_API_KEY=fake-key"}
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "OPENAI_API_KEY=fake-key", "XDG_STATE_HOME=" + filepath.Join(workspace, "state")}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	input, err := cmd.StdinPipe()

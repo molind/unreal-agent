@@ -110,6 +110,9 @@ func launch(t *testing.T, workspace string, fail bool, args ...string) *chatTest
 		}
 	})
 	provider := agentrunner.Provider{Name: "openai-codex", NewClient: func(string, string, int, func(string) string) (agentrunner.Client, error) { return c.client, nil }}
+	// Existing lifecycle tests exercise the supported legacy backend. SQLite
+	// end-to-end tests override this explicit flag below, never use the host HOME.
+	args = append([]string{"-storage-format", "jsonl"}, args...)
 	args = append(args, workspace)
 	go func() {
 		defer close(c.exited)
@@ -560,7 +563,7 @@ func TestFailuresCloseRuntime(t *testing.T) {
 func TestMissingStartupSessionAndConfiguration(t *testing.T) {
 	workspace := t.TempDir()
 	reader := io.NopCloser(strings.NewReader(""))
-	err := Run(t.Context(), []string{"-session", "missing", workspace}, func(string) string { return "" }, reader, io.Discard, io.Discard, nil, nil)
+	err := Run(t.Context(), []string{"-storage-format", "jsonl", "-session", "missing", workspace}, func(string) string { return "" }, reader, io.Discard, io.Discard, nil, nil)
 	if err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing session: %v", err)
 	}

@@ -28,8 +28,17 @@ Choose a workspace and save the output:
 unreal-agent-runner -workspace ./my-project -p 'Summarize this project.' > run.jsonl
 ```
 
-Sessions: `${XDG_STATE_HOME:-$HOME/.local/state}/unreal-agent/sessions`
-(override with `-session-directory`).
+Sessions default to legacy JSONL at
+`${XDG_STATE_HOME:-$HOME/.local/state}/unreal-agent/sessions`
+(override with `-session-directory`). This compatibility default is unchanged for
+benchmark/script consumers. Select `-storage-format sqlite` to use the same XDG
+workspace database, compressed artifacts, and file revision/receipt storage as
+`unreal_chat`. With SQLite and no directory override, the path is
+`${XDG_STATE_HOME:-$HOME/.local/state}/unreal-agent/workspaces/<workspace-id>`.
+Only one SQLite harness writer per workspace may run at a time. Standard output
+remains JSONL regardless of the storage backend. See
+[storage and migration](../unreal_chat/README.md#sqlite-storage-and-migration) for
+`unreal-storage` inspection, artifact export, backup and offline migration.
 
 You can also pass a JSON request as an argument or through stdin:
 

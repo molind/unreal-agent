@@ -13,6 +13,7 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/cmd/internal/agentrunner"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 )
 
 const help = `Enter a complete line to send a message (also while work is running).
@@ -79,6 +80,7 @@ type config struct {
 	attempts                                                        int
 	prompt                                                          string
 	transport                                                       string
+	storageFormat                                                   string
 }
 
 func parse(args []string, getenv func(string) string, out io.Writer) (config, error) {
@@ -100,7 +102,8 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 	f.Lookup("base-url").DefValue = ""
 	attempts := env("UNREAL_HARNESS_LLM_MAX_ATTEMPTS", "1")
 	f.Func("max-attempts", "bounded provider request attempts (default 1)", func(v string) error { attempts = v; return nil })
-	f.StringVar(&c.directory, "session-directory", "", "session directory (default <workspace>/.harness/sessions; relative to workspace)")
+	f.StringVar(&c.directory, "session-directory", "", "storage directory (default $XDG_STATE_HOME/unreal-agent/workspaces/<workspace-id>, or $HOME/.local/state/...; relative overrides use workspace)")
+	f.StringVar(&c.storageFormat, "storage-format", "sqlite", "sqlite (default) or legacy jsonl")
 	f.StringVar(&c.session, "session", "", "resume an existing session ID")
 	f.Usage = func() {
 		fmt.Fprintln(out, "Usage: unreal_chat [flags] [workspace]")
@@ -109,6 +112,9 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 	}
 	if err := f.Parse(args); err != nil {
 		return c, err
+	}
+	if c.storageFormat != "sqlite" && c.storageFormat != "jsonl" {
+		return c, errors.New("invalid -storage-format; use sqlite or jsonl")
 	}
 	switch c.transport {
 	case "", "auto", "http", "websocket":
@@ -157,7 +163,14 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 		return c, errors.New("workspace is not a directory")
 	}
 	if c.directory == "" {
-		c.directory = ".harness/sessions"
+		if c.storageFormat == "jsonl" {
+			c.directory = ".harness/sessions"
+		} else {
+			c.directory, err = storage.Directory(c.workspace, getenv)
+			if err != nil {
+				return c, err
+			}
+		}
 	}
 	if !filepath.IsAbs(c.directory) {
 		c.directory = filepath.Join(c.workspace, c.directory)

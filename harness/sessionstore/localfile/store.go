@@ -17,6 +17,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 )
 
 const sessionFileSuffix = ".session.jsonl"
@@ -27,6 +28,7 @@ type cachedWriteState struct {
 }
 
 type Store struct {
+	database             *storage.DB
 	directory            string
 	writeStateCacheMutex sync.Mutex
 	writeStateCache      map[session.ID]cachedWriteState
@@ -84,6 +86,10 @@ func (store *Store) Create(ctx context.Context, id session.ID) (sessionstore.Sna
 }
 
 func (store *Store) Inspect(ctx context.Context, id session.ID) (sessionstore.Snapshot, error) {
+	if store.database != nil {
+		snapshot, _, err := store.sqlHeader(ctx, id)
+		return snapshot, err
+	}
 	state, _, err := store.readState(ctx, id)
 	if err != nil {
 		return sessionstore.Snapshot{}, err
@@ -99,6 +105,9 @@ func (store *Store) Items(
 ) (sessionstore.Page, error) {
 	if limit <= 0 {
 		return sessionstore.Page{}, fmt.Errorf("item page limit must be positive")
+	}
+	if store.database != nil {
+		return store.sqlItems(ctx, id, after, limit)
 	}
 
 	state, _, err := store.readState(ctx, id)
@@ -219,13 +228,14 @@ func (store *Store) SaveOperation(
 	if err := head.saveOperation(value); err != nil {
 		return err
 	}
-	return store.append(
-		id,
-		head,
-		committedSize,
-		recordOperation,
-		operationRecord{Operation: value},
-	)
+	if err := store.captureOperation(ctx, value, false); err != nil {
+		store.evictCachedWriteState(id)
+		return err
+	}
+	if err := store.append(id, head, committedSize, recordOperation, operationRecord{Operation: value}); err != nil {
+		return err
+	}
+	return store.captureOperation(ctx, value, true)
 }
 
 func (store *Store) Resume(ctx context.Context, id session.ID) (sessionstore.ResumeState, error) {
@@ -281,6 +291,9 @@ func (store *Store) readState(
 	if err := context.Cause(ctx); err != nil {
 		return storedState{}, 0, err
 	}
+	if store.database != nil {
+		return store.sqlState(ctx, id)
+	}
 	encoded, err := os.ReadFile(store.sessionPath(id))
 	if err != nil {
 		return storedState{}, 0, fmt.Errorf("read session %q: %w", id, err)
@@ -321,6 +334,9 @@ func (store *Store) loadWriteState(
 }
 
 func (store *Store) publishInitialState(state storedState) error {
+	if store.database != nil {
+		return store.sqlCreate(state)
+	}
 	encoded, err := encodeInitialLog(state.Snapshot.Session, state.Items)
 	if err != nil {
 		return err
@@ -340,6 +356,13 @@ func (store *Store) append(
 	kind recordType,
 	value any,
 ) error {
+	if store.database != nil {
+		err := store.sqlAppend(id, head, committedSize, kind, value)
+		if err != nil {
+			store.evictCachedWriteState(id)
+		}
+		return err
+	}
 	encoded, err := encodeRecord(kind, value)
 	if err != nil {
 		store.evictCachedWriteState(id)

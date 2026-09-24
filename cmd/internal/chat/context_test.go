@@ -57,6 +57,11 @@ func summaryCall(t *testing.T, c *chatTest) modelCall {
 }
 
 func TestChatContextCompactionAndRestart(t *testing.T) {
+	for _, migrate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("migrate-to-sqlite=%t", migrate), func(t *testing.T) { testChatContextCompactionRestart(t, migrate) })
+	}
+}
+func testChatContextCompactionRestart(t *testing.T, migrate bool) {
 	workspace := t.TempDir()
 	store := seedContextChat(t, workspace)
 	c := launch(t, workspace, false, "-session", "context-case")
@@ -98,7 +103,23 @@ func TestChatContextCompactionAndRestart(t *testing.T) {
 	if originals != 7 {
 		t.Fatal("compaction deleted original transcript")
 	}
-	c = launch(t, workspace, false, "-session", "context-case")
+	resumeArgs := []string{"-session", "context-case"}
+	if migrate {
+		directory := filepath.Join(workspace, "sqlite-state")
+		converted, err := localfile.NewSQLite(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = converted.ImportLegacy(t.Context(), filepath.Join(workspace, ".harness/sessions")); err != nil {
+			_ = converted.Close()
+			t.Fatal(err)
+		}
+		if err = converted.Close(); err != nil {
+			t.Fatal(err)
+		}
+		resumeArgs = append(resumeArgs, "-storage-format", "sqlite", "-session-directory", directory)
+	}
+	c = launch(t, workspace, false, resumeArgs...)
 	c.send("after restart")
 	ordinary = c.call()
 	if len(ordinary.request.Tools) == 0 || !strings.Contains(strings.Join(messages(ordinary.request, llm.RoleUser), "\n"), summary) {

@@ -43,7 +43,17 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 	if err != nil {
 		return err
 	}
-	log, err := openLogs(c.directory, d.safe)
+	store, release, err := openStorage(ctx, c)
+	if err != nil {
+		return boundary("storage", err)
+	}
+	defer func() { result = errors.Join(result, store.Close(), release()) }()
+	var log *logs
+	if store.Database() != nil {
+		log = openDatabaseLogs(store.Database(), d.safe)
+	} else {
+		log, err = openLogs(c.directory, d.safe)
+	}
 	if err != nil {
 		return boundary("diagnostic storage", err)
 	}
@@ -56,7 +66,7 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 			event = "failed"
 			result = boundary(stage, result)
 		}
-		result = errors.Join(result, log.event(stage, event, id, "", result), log.file.Close())
+		result = errors.Join(result, log.event(stage, event, id, "", result), log.close())
 		if result != nil {
 			result = fmt.Errorf("%w (diagnostic log: %s)", result, log.diagnostic)
 		}
@@ -65,10 +75,6 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 		return err
 	}
 	stage = "storage"
-	store, err := localfile.New(c.directory)
-	if err != nil {
-		return err
-	}
 	id = session.ID(c.session)
 	opened, err := openSession(ctx, store, c.session)
 	if err != nil {
@@ -414,7 +420,11 @@ func (a *application) announce() error {
 	if id == "" {
 		id = "(unsaved; first message saves)"
 	}
-	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\nCommand logs: %s\nDiagnostic log: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort, filepath.Join(a.logs.directory, "commands"), a.logs.diagnostic)
+	commandLogs := filepath.Join(a.logs.directory, "commands")
+	if a.logs.database != nil {
+		commandLogs = a.logs.database.Path + " (diagnostics table; use unreal-storage logs)"
+	}
+	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\nCommand logs: %s\nDiagnostic log: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort, commandLogs, a.logs.diagnostic)
 	text += "Context: recover on provider overflow; repeated compaction requires approval.\n"
 	if a.display.ui != nil {
 		return a.display.write("\n" + paint(a.display.color, "1", "  unreal chat") + "\n" + paint(a.display.color, "2", a.display.safe(text)) + "\n")

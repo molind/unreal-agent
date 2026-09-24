@@ -16,7 +16,7 @@ func fileDefinitions() []Definition {
 		return Definition{Tool: llm.Tool{Type: llm.ToolFunction, Name: name, Description: description, Parameters: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}}
 	}
 	return []Definition{
-		makeTool(ReadName, "Read a local UTF-8 text file with numbered lines and a short revision token. Prefer this to shell file reads. Reads up to 8 MiB; output is bounded. Not a sandbox.", map[string]any{
+		makeTool(ReadName, "Read a local UTF-8 text file with numbered lines and a short revision token, or an immutable artifact:/capture: reference from a tool result (no revision). Prefer this to shell file reads. For artifacts offset is a 1-based byte position and limit is bytes (1..2000); local files use lines. Reads up to 8 MiB; output is bounded. Not a sandbox.", map[string]any{
 			"path": path(), "offset": map[string]any{"type": "integer", "minimum": 1, "default": 1, "description": "First line, 1-based."}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 2000, "default": 200},
 		}, "path"),
 		makeTool(EditName, "Edit a file by exact literal text replacement, with revision conflict detection. Prefer this to shell/Python edits. Unique old_text is required unless replace_all=true. Returns a diff and next revision. User authorization to edit is still required.", map[string]any{

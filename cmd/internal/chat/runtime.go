@@ -71,6 +71,9 @@ func newInput(kind inbox.InputKind, value any) inbox.Input {
 }
 
 func startRuntime(parent context.Context, c config, id session.ID, store *localfile.Store, adapter llm.Adapter, log *logs) (*runtime, error) {
+	if err := store.CleanupCaptures(parent, id); err != nil {
+		return nil, err
+	}
 	restored, err := store.Resume(parent, id)
 	if err != nil {
 		return nil, err
@@ -92,7 +95,7 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 		cancel()
 		return nil, err
 	}
-	r := &runtime{inputs: inputs, operations: operation.NewLocalOperationManager(ctx), cancel: cancel, events: make(chan event, 128), done: make(chan error, 1)}
+	r := &runtime{inputs: inputs, operations: operation.NewLocalOperationManagerWithStorage(ctx, store.Database()), cancel: cancel, events: make(chan event, 128), done: make(chan error, 1)}
 	emit := func(e event) {
 		select {
 		case r.events <- e:
@@ -103,7 +106,7 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 	fileConfig := files.Config{Directory: c.workspace, BaseDirectory: directory}
 	registry := tool.NewRegistry(tool.StaticTranslators{
 		Read: files.NewRead(fileConfig), Edit: files.NewEdit(fileConfig), Write: files.NewWrite(fileConfig),
-		Bash:      bash.New(bash.Config{Shell: "/bin/sh", Directory: c.workspace, BaseDirectory: directory}),
+		Bash:      bash.New(bash.Config{Artifacts: store.Database() != nil, Shell: "/bin/sh", Directory: c.workspace, BaseDirectory: directory}),
 		ViewImage: viewimage.New(viewimage.Config{Directory: c.workspace}),
 	}, tool.BashName, tool.ViewImageName, tool.ReadName, tool.EditName, tool.WriteName)
 	builder := contextbuilder.NewBuilder()

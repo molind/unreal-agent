@@ -6,9 +6,11 @@ import (
 	"fmt"
 
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 )
 
 type LocalOperationManager struct {
+	database        *storage.DB
 	ctx             context.Context
 	remoteJobs      *remoteJobHandlers
 	adds            chan localAddRequest
@@ -62,7 +64,11 @@ func (current *localRunningOperation) initialize() error {
 var _ Manager = (*LocalOperationManager)(nil)
 
 func NewLocalOperationManager(ctx context.Context, remoteJobHandlers ...RemoteJobHandler) *LocalOperationManager {
+	return NewLocalOperationManagerWithStorage(ctx, nil, remoteJobHandlers...)
+}
+func NewLocalOperationManagerWithStorage(ctx context.Context, db *storage.DB, remoteJobHandlers ...RemoteJobHandler) *LocalOperationManager {
 	manager := &LocalOperationManager{
+		database:        db,
 		ctx:             ctx,
 		remoteJobs:      newRemoteJobHandlers(ctx, remoteJobHandlers),
 		adds:            make(chan localAddRequest),
@@ -159,6 +165,11 @@ func (manager *LocalOperationManager) run() {
 				cancel()
 				request.result <- err
 				continue
+			}
+			if current.operation.Type == TypeFile && manager.database != nil {
+				current.handle = func(event *primitives.PrimitiveEvent) (Step, error) {
+					return advanceFileStored(current.operation, event, manager.database)
+				}
 			}
 			step, err := current.handle(nil)
 			if err != nil {

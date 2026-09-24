@@ -140,7 +140,7 @@ func TestDiagnosticCausesStacksRedactionAndPermissions(t *testing.T) {
 	provider := agentrunner.Provider{Name: "openai-codex", NewClient: func(string, string, int, func(string) string) (agentrunner.Client, error) {
 		return nil, fmt.Errorf("provider init: %w", cause)
 	}}
-	err := Run(t.Context(), []string{workspace}, func(string) string { return "" }, io.NopCloser(strings.NewReader("")), io.Discard, io.Discard, nil, []agentrunner.Provider{provider})
+	err := Run(t.Context(), []string{"-storage-format", "jsonl", workspace}, func(string) string { return "" }, io.NopCloser(strings.NewReader("")), io.Discard, io.Discard, nil, []agentrunner.Provider{provider})
 	if !errors.Is(err, cause) || !strings.Contains(err.Error(), "dial refused") {
 		t.Fatalf("lost cause: %v", err)
 	}

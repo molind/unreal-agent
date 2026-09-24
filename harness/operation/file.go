@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 )
 
 const (
@@ -31,6 +32,9 @@ type FileInput struct {
 	ReplaceAll    bool
 }
 type FileResult struct {
+	Unit         string `json:"unit,omitempty"`
+	Encoding     string `json:"encoding,omitempty"`
+	TotalBytes   int64  `json:"total_bytes,omitzero"`
 	Path         string `json:"path"`
 	Revision     string `json:"revision,omitempty"`
 	Text         string `json:"text,omitempty"`
@@ -59,7 +63,10 @@ func NewFileSpec(input FileInput) (Spec, error) {
 	return Spec{Type: TypeFile, Version: VersionFile, State: state}, err
 }
 func validateFileInput(in FileInput) error {
-	if in.Path == "" || !strings.HasPrefix(in.Path, "/") || strings.ContainsRune(in.Path, 0) {
+	if storage.IsReference(in.Path) && in.Action != "Read" {
+		return fmt.Errorf("artifacts are immutable; export before editing")
+	}
+	if in.Path == "" || (!strings.HasPrefix(in.Path, "/") && !storage.IsReference(in.Path)) || strings.ContainsRune(in.Path, 0) {
 		return fmt.Errorf("file path must be absolute and contain no NUL")
 	}
 	if in.BaseDirectory == "" || !strings.HasPrefix(in.BaseDirectory, "/") {
@@ -105,6 +112,9 @@ func DecodeFileState(op Operation) (FileState, error) {
 // File actions are dispatched to a joined blocking worker. Translation and the
 // coordinator remain I/O-free; only the worker performs filesystem operations.
 func AdvanceFile(op Operation, event *primitives.PrimitiveEvent) (Step, error) {
+	return advanceFileStored(op, event, nil)
+}
+func advanceFileStored(op Operation, event *primitives.PrimitiveEvent, db *storage.DB) (Step, error) {
 	state, err := DecodeFileState(op)
 	if err != nil {
 		return Step{}, err
@@ -123,7 +133,7 @@ func AdvanceFile(op Operation, event *primitives.PrimitiveEvent) (Step, error) {
 		return Step{Operation: &op, Dispatches: []PrimitiveDispatch{{Type: primitives.PrimitiveDispatchCompute, Data: primitives.ComputeRequest{
 			Source: primitives.SourceID(op.ID), CorrelationID: "file",
 			Run: func(ctx context.Context) (any, error) {
-				result, err := executeFile(ctx, op.ID, state.Input)
+				result, err := executeFileStored(ctx, op.ID, state.Input, db)
 				if err != nil {
 					result.Error = err.Error()
 				}

@@ -8,7 +8,7 @@ An async-first agent harness from Unreal Labs.
 
 ## Interactive coding chat
 
-Build both executables with `make build`, then run `./bin/unreal_chat [workspace]`
+Build the executables with `make build`, then run `./bin/unreal_chat [workspace]`
 (or `go run ./cmd/unreal_chat`). See the [chat README](cmd/unreal_chat/README.md)
 for authentication, flags, session commands, and local-execution safety limits.
 The existing `unreal-agent-runner` remains the one-shot JSONL interface.

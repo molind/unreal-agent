@@ -50,7 +50,8 @@ but is not used by Codex. Ollama does not need a key.
 | `-transport auto\|websocket\|http` | `UNREAL_HARNESS_LLM_TRANSPORT`; default auto on first-party OpenAI/Codex, HTTP on custom endpoints |
 | `-max-attempts` | `UNREAL_HARNESS_LLM_MAX_ATTEMPTS` / **1** |
 | `-session ID` | Resume an existing session; missing IDs are errors |
-| `-session-directory DIR` | `<workspace>/.harness/sessions`; relative paths are workspace-relative |
+| `-session-directory DIR` | XDG workspace state directory (see below); relative overrides are workspace-relative |
+| `-storage-format sqlite\|jsonl` | `sqlite`; `jsonl` retains the old workspace-local layout |
 
 Flags override environment values. Reasoning effort supports `low`, `medium`,
 `high`, `xhigh`, and `max` (provider support varies). Unlike the one-shot runner,
@@ -234,7 +235,8 @@ empty transcript is labeled explicitly. If the first prompt is literally
 `continue`, it is a different conversation with no earlier task. There is no ID
 substitution, merging, or implicit startup resume.
 
-History and operation captures are canonical files under `.harness/sessions`.
+History and completed operation captures are canonical data in the workspace's
+SQLite database (or files under `.harness/sessions` in legacy JSONL mode).
 Resume displays saved user/assistant messages once and does not replay old tool
 notices. The model receives the saved working context, including retained tool results and
 provider state; successful compaction checkpoints replace only older prefixes.
@@ -284,11 +286,11 @@ neutral. The same highlighting applies to `diff` and `patch` Markdown code block
 Each changed row resets its style before the newline; no padding is added to the
 copied text. `NO_COLOR` and plain/piped output keep uncolored text. This changes
 presentation only, not captured diffs or model context.
-Long previews are bounded; the full patch is captured as
-`<session-directory>/operations/<session-ID>/<operation-ID>/change.diff`.
-File lifecycle logs describe the action/path and capture location, not contents.
-Receipts and revision bindings are private session files (directories 0700,
-metadata 0600). Canonical operation state/captures contain unredacted file data;
+Long previews are bounded; the full patch is an `artifact:HASH` in SQLite,
+or `<session-directory>/operations/<session-ID>/<operation-ID>/change.diff` in
+legacy JSONL mode. File lifecycle logs describe the action/path and capture
+reference, not contents. Receipts and revision bindings are private SQLite rows
+(or legacy files with directories 0700, metadata 0600). Canonical operation state/captures contain unredacted file data;
 protect them like source code. UI previews still use normal credential/control
 redaction. Old diffs are not replayed as new edits on `/resume`.
 
@@ -431,10 +433,90 @@ to compress. In that case use `/new` with a concise handoff. Other harness hosts
 opt into recovery with `coordinator.Dependencies.RecoverContext`; a noninteractive
 host encountering a saved approval gate errors rather than waiting forever.
 
+## SQLite storage and migration
+
+Chat defaults to one private SQLite database per workspace:
+
+```text
+${XDG_STATE_HOME:-$HOME/.local/state}/unreal-agent/workspaces/<workspace-id>/state.sqlite3
+```
+
+The ID is SHA-256 of the canonical absolute workspace path. Symlink aliases share
+an identity. Relative `XDG_STATE_HOME` is ignored, as required by XDG. An explicit
+`-session-directory` overrides the directory, but SQLite checks the saved workspace
+identity before resuming. Moving a workspace does not silently rebind its history.
+
+The database contains append-only session events, latest operation states, redacted
+logs, file revision bindings and edit receipts. Large repeated text/image payloads
+are content-addressed; stdout/stderr and complete diffs use independently compressed
+128 KiB blocks. Compression is lossless; context compaction still retains original
+history. One database, WAL/SHM sidecars while active, and one workspace writer-lock
+file replace per-operation metadata/log files. One harness writer per workspace is
+supported; readers and backups may run concurrently.
+
+Bash writes to ordinary durable spool files while running. Closed captures are
+imported before a terminal checkpoint commits and removed only after that commit.
+Interrupted or possibly still-active captures are retained. File-tool edits still
+use durable intent/completion receipts around atomic filesystem replacement;
+SQLite does not make an external filesystem edit part of its transaction.
+
+Build `unreal-storage` with `make build`. It needs no provider or credentials:
+
+```sh
+unreal-storage -workspace ./my-project path
+unreal-storage -workspace ./my-project sessions
+unreal-storage -workspace ./my-project logs SESSION_ID
+unreal-storage -workspace ./my-project history SESSION_ID > history.jsonl
+unreal-storage -workspace ./my-project artifacts
+unreal-storage -workspace ./my-project -offset 0 -count 4096 read capture:HASH
+unreal-storage -workspace ./my-project export artifact:HASH output.txt
+unreal-storage -workspace ./my-project check
+unreal-storage -workspace ./my-project backup workspace-backup.sqlite3
+```
+
+`Read` also accepts `artifact:HASH` / `capture:HASH` references. For these immutable
+objects only, `offset` is a **1-based byte position** and `limit` is a byte count
+(1..2000), not lines. Results include `unit`, `total_bytes`, `encoding` and a next
+offset; binary or split UTF-8 sequences use base64. No editable revision is issued.
+CLI ranges are **0-based bytes** and exports preserve exact bytes. Exports/backups
+refuse to overwrite existing files. A database backup contains **all sessions** in
+that workspace, not just the selected one. Stop work before a complete archival
+backup: live external spools and workspace source files are not included in SQLite.
+Never copy only the main `.sqlite3` file while WAL is active.
+
+### Existing JSONL history
+
+Migration is **explicit and offline**: stop old chat/runner processes first.
+A SQLite chat detecting unimported legacy history refuses to silently start with an
+empty history and prints migration instructions. From this repository, for example:
+
+```sh
+./bin/unreal-storage -workspace . migrate .harness/sessions
+./bin/unreal_chat -session SESSION_ID .
+```
+
+Use matching `-session-directory DIR` overrides for a custom destination. Each
+session history and source fingerprint commit together; retrying does not duplicate
+history and changed sources are rejected. Unsupported/corrupt history fails
+explicitly. A torn final uncommitted JSONL record is ignored as in the legacy
+reader. Original journals, captures, revision files and logs are **retained** as
+migration backups. Do not run legacy and SQLite writers against the same imported
+history. `-storage-format jsonl` keeps the old behavior and defaults to
+`<workspace>/.harness/sessions`, but is not a reverse migration of newer SQLite work.
+
+No automatic history/artifact deletion or garbage collection is enabled. FTS
+search and single-session SQLite exports are future work. See the
+[storage architecture](../../harness/storage/README.md) for invariants.
+
 ## Local logs and diagnostics
 
-Startup and `/status` show both locations, relative to the selected session
-storage (so `-session-directory` also relocates logs):
+With SQLite, startup and `/status` show the database and `diagnostics` table.
+Use `unreal-storage logs [SESSION_ID]` to export redacted JSONL. Lifecycle records
+retain command, timing, exit status and artifact references, not duplicate output.
+Failures before the database opens remain stderr diagnostics.
+
+With `-storage-format jsonl`, startup and `/status` show both legacy locations,
+relative to the selected session storage (so `-session-directory` relocates logs):
 
 - `<session-directory>/logs/commands/<session-ID>/<operation-ID>.jsonl`:
   command lifecycle records, UTC timestamp, session/operation identity, command,
@@ -472,7 +554,8 @@ failures before log storage can be opened may only have stderr diagnostics.
   This is **not** an enforced read-only mode, sandbox, or approval system.
 - Bash (`/bin/sh`), ViewImage, Read, Edit and Write are available. No remote tools, skill discovery,
   background jobs surviving exit, or multiple agents are added by this MVP.
-- Use only one process per session; there is no cross-process session lock.
+- SQLite enforces one harness writer per workspace. In legacy JSONL mode use
+  only one process per session; that backend has no cross-process session lock.
   Forced termination/power loss cannot guarantee child cleanup or rollback.
   Existing unfinished sessions without a durable stop retain normal harness
   recovery behavior. Keep the same workspace when resuming custom storage.

@@ -9,10 +9,12 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"github.com/unreallabsai/unreal-agent/harness/storage"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 )
 
 type Config struct {
+	Artifacts     bool
 	Shell         string
 	Directory     string
 	BaseDirectory string
@@ -58,6 +60,23 @@ func (translator *translator) TranslateResult(
 	output, err := translateOperationResult(callID, operations[0])
 	if err != nil {
 		return llm.ToolResult{}, err
+	}
+	state, decodeErr := operation.DecodeShellState(operations[0])
+	if decodeErr != nil {
+		return llm.ToolResult{}, decodeErr
+	}
+	// Rendering is part of canonical context: never rewrite old tool results
+	// merely because a session moved from JSONL to SQLite.
+	if state.Input.ArtifactReferences {
+		for _, path := range []string{state.OutPath, state.ErrPath} {
+			if path != "" && (state.Result != nil || state.CapturesClosed) {
+				if state.Result == nil {
+					output = strings.ReplaceAll(output, "capture: "+path, "capture: "+storage.Reference(path))
+				} else {
+					output = strings.ReplaceAll(output, "; complete output in "+path, "; complete output in "+storage.Reference(path))
+				}
+			}
+		}
 	}
 	return llm.ToolResult{CallID: callID, Output: []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: output}}}, nil
 }
@@ -151,9 +170,10 @@ func validateArguments(encoded string) (string, int, error) {
 
 func (translator *translator) buildOperation(command string, limit int) (operation.Spec, error) {
 	spec, err := operation.NewShellSpec(operation.ShellInput{
-		Command:   command,
-		Shell:     translator.config.Shell,
-		Directory: translator.config.Directory,
+		ArtifactReferences: translator.config.Artifacts,
+		Command:            command,
+		Shell:              translator.config.Shell,
+		Directory:          translator.config.Directory,
 	}, translator.config.BaseDirectory, limit)
 	if err != nil {
 		return operation.Spec{}, fmt.Errorf("build Bash operation: %w", err)
