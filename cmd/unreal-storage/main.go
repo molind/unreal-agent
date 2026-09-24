@@ -29,6 +29,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, out, er
 	directory := flags.String("session-directory", "", "storage directory; default XDG workspace directory")
 	offset := flags.Int64("offset", 0, "artifact byte offset, 0-based")
 	count := flags.Int64("count", 128<<10, "maximum bytes for read (up to 8 MiB)")
+	keepSource := flags.Bool("keep-source", false, "migrate: import without removing legacy files (offline copy mode)")
 	flags.Usage = func() {
 		fmt.Fprintln(errout, `Usage: unreal-storage [flags] command [arguments]
   path                      Print the database path without creating it
@@ -40,7 +41,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, out, er
   logs [SESSION]            Export redacted diagnostic records as JSONL
   check                     Check SQLite structure, references and artifact bytes
   backup FILE               Consistent standalone database snapshot; no overwrite
-  migrate LEGACY_DIRECTORY  OFFLINE import; stop old writers first; keeps sources
+  migrate LEGACY_DIRECTORY  Import, verify and clean idle legacy storage; --keep-source disables cleanup
 Flags must precede the command.`)
 		flags.PrintDefaults()
 	}
@@ -102,10 +103,25 @@ Flags must precede the command.`)
 		if err = db.BindWorkspace(ctx, work); err != nil {
 			return err
 		}
-		if err = store.ImportLegacy(ctx, rest[0]); err != nil {
+		if *keepSource {
+			lease, err := storage.LockLegacyDirectory(rest[0], true)
+			if err != nil {
+				return err
+			}
+			defer lease.Close()
+			if err = storage.LegacyIdle(ctx, rest[0]); err != nil {
+				return err
+			}
+			if err = store.ImportLegacy(ctx, rest[0]); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(out, "Migration verified; source files retained. Database:", db.Path)
 			return err
 		}
-		_, err = fmt.Fprintln(out, "Migration verified; source files retained. Database:", db.Path)
+		if err = store.MigrateLegacy(ctx, rest[0]); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, "Migration verified; migrated source files removed, unknown files preserved. Database:", db.Path)
 		return err
 	case "sessions":
 		list, err := store.ListSessions(ctx)

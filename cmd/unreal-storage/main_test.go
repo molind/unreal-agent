@@ -41,8 +41,20 @@ func TestStorageCLIWithoutProviderAndSafeExports(t *testing.T) {
 	if _, err = os.Stat(directory); !os.IsNotExist(err) {
 		t.Fatal("path command created database")
 	}
+	if _, err = invoke("-keep-source", "migrate", source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(source, "s.session.jsonl")); err != nil {
+		t.Fatal("keep-source removed journal", err)
+	}
 	if _, err = invoke("migrate", source); err != nil {
 		t.Fatal(err)
+	}
+	if _, err = os.Stat(source); !os.IsNotExist(err) {
+		t.Fatal("default migration did not clean source", err)
+	}
+	if _, err = invoke("migrate", source); err != nil {
+		t.Fatal("cleanup retry failed", err)
 	}
 	if got, err := invoke("history", "s"); err != nil || !strings.Contains(got, "hello history") {
 		t.Fatal(got, err)

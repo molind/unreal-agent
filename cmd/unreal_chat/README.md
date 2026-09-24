@@ -486,23 +486,40 @@ Never copy only the main `.sqlite3` file while WAL is active.
 
 ### Existing JSONL history
 
-Migration is **explicit and offline**: stop old chat/runner processes first.
-A SQLite chat detecting unimported legacy history refuses to silently start with an
-empty history and prints migration instructions. From this repository, for example:
+Migration is **automatic on SQLite startup**. Close the old chat/runner, then
+start the new chat normally, including `-session SESSION_ID` if desired. Startup
+checks `<workspace>/.harness/sessions` and the selected storage directory, imports
+legacy history, verifies the exact archived bytes and canonical event prefix, then
+removes the migrated files. `.harness` is removed **only when empty**: skills,
+experiments and unknown files are preserved. An explicit SQLite destination inside
+`.harness` is also preserved. No recursive directory deletion is used.
+
+New JSONL hosts share a source-directory lock that excludes migration. For older
+binaries, startup also checks open descriptors (`/proc` on Linux; `lsof` and `ps`
+on macOS/other Unix hosts). Migration refuses to delete anything if the source is
+busy or process inspection is unavailable. Older one-shot runners can have no
+storage descriptor while waiting for a provider, so migration conservatively waits
+until other `unreal-agent-runner` processes exit. Stop third-party/custom writers
+as well: advisory locks cannot exclude software that ignores them.
+
+Raw original files, including torn uncommitted JSONL tails, remain recoverable as
+compressed database artifacts. A durable cleanup manifest resumes partial cleanup
+after a crash; previously imported history with newer SQLite events is not
+replaced. Changed sources or failed verification stop cleanup. Unfinished shells
+get new durable spool paths before old files are removed; historical result text
+and saved compaction hashes remain unchanged. File receipts remain in SQLite.
+
+Manual migration uses the same verified cleanup; use `-keep-source` for the old
+non-destructive copy mode instead:
 
 ```sh
 ./bin/unreal-storage -workspace . migrate .harness/sessions
-./bin/unreal_chat -session SESSION_ID .
+./bin/unreal-storage -workspace . -keep-source migrate /path/to/legacy-sessions
 ```
 
-Use matching `-session-directory DIR` overrides for a custom destination. Each
-session history and source fingerprint commit together; retrying does not duplicate
-history and changed sources are rejected. Unsupported/corrupt history fails
-explicitly. A torn final uncommitted JSONL record is ignored as in the legacy
-reader. Original journals, captures, revision files and logs are **retained** as
-migration backups. Do not run legacy and SQLite writers against the same imported
-history. `-storage-format jsonl` keeps the old behavior and defaults to
-`<workspace>/.harness/sessions`, but is not a reverse migration of newer SQLite work.
+Use matching `-session-directory DIR` overrides for a custom destination.
+`-storage-format jsonl` retains the legacy layout and bypasses automatic migration,
+but is not a reverse migration of newer SQLite work.
 
 No automatic history/artifact deletion or garbage collection is enabled. FTS
 search and single-session SQLite exports are future work. See the

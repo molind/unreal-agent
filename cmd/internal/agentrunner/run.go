@@ -319,19 +319,17 @@ func Run(
 		if err := store.Database().BindWorkspace(ctx, workspace); err != nil {
 			return err
 		}
-		legacy, err := filepath.Glob(filepath.Join(storeDirectory, "*.session.jsonl"))
+		for _, directory := range []string{filepath.Join(workspace, ".harness", "sessions"), storeDirectory} {
+			if err := store.MigrateLegacy(ctx, directory); err != nil {
+				return err
+			}
+		}
+	} else {
+		lease, err := storage.LockLegacyDirectory(storeDirectory, false)
 		if err != nil {
 			return err
 		}
-		for _, path := range legacy {
-			var n int
-			if err := store.Database().QueryRow("SELECT count(*) FROM imports WHERE source=?", path).Scan(&n); err != nil {
-				return err
-			}
-			if n == 0 {
-				return fmt.Errorf("legacy history found; stop legacy writers and run unreal-storage migrate %q first", storeDirectory)
-			}
-		}
+		defer lease.Close()
 	}
 	sessionID, restored, err := openSession(ctx, store, parsed.SessionID)
 	if err != nil {

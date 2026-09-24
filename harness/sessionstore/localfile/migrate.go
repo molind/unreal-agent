@@ -17,10 +17,11 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/storage"
 )
 
-// ImportLegacy is an explicit OFFLINE migration. Stop all legacy writers first:
-// they do not participate in the SQLite workspace writer lock. Source files are
-// never changed or deleted, including a torn trailing JSONL record. Each session
-// and its source fingerprint commit together; retries never duplicate history.
+// ImportLegacy is the non-destructive, offline import primitive. Callers must
+// exclude source writers; MigrateLegacy and the CLI also provide directory locks
+// and checks for pre-lock binaries. Source files are never changed or deleted,
+// including torn trailing records. Each history and its fingerprint commit
+// together; retries never duplicate history.
 func (s *Store) ImportLegacy(ctx context.Context, directory string) error {
 	if s.database == nil {
 		return errors.New("migration requires SQLite destination")
@@ -150,7 +151,7 @@ func (s *Store) importAuxiliary(ctx context.Context, source, id string) error {
 			return err
 		}
 		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) != 2 {
+		if len(parts) != 2 || !knownMigrationFile([]string{"operations", id, parts[0], parts[1]}, map[string]bool{id: true}) {
 			return nil
 		}
 		if parts[0] == "revisions" && strings.HasSuffix(parts[1], ".json") {
@@ -200,6 +201,16 @@ func (s *Store) importLegacyLogs(ctx context.Context, source string) error {
 	// Preserve redacted diagnostic/command JSONL as artifacts with path aliases.
 	// No transcript or credential discovery is performed here.
 	logs := filepath.Join(source, "logs")
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	sessions := map[string]bool{}
+	for _, entry := range entries {
+		if id, ok := strings.CutSuffix(entry.Name(), sessionFileSuffix); ok {
+			sessions[id] = true
+		}
+	}
 	return filepath.WalkDir(logs, func(path string, entry fs.DirEntry, walkErr error) error {
 		if errors.Is(walkErr, os.ErrNotExist) && path == logs {
 			return nil
@@ -210,7 +221,11 @@ func (s *Store) importLegacyLogs(ctx context.Context, source string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("refusing symlink in legacy logs")
 		}
-		if !entry.IsDir() && entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".jsonl") {
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && entry.Type().IsRegular() && knownMigrationFile(strings.Split(rel, string(filepath.Separator)), sessions) {
 			return s.database.RetainCapture(ctx, path)
 		}
 		return nil

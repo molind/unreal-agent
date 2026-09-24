@@ -38,7 +38,11 @@ workspace database, compressed artifacts, and file revision/receipt storage as
 Only one SQLite harness writer per workspace may run at a time. Standard output
 remains JSONL regardless of the storage backend. See
 [storage and migration](../unreal_chat/README.md#sqlite-storage-and-migration) for
-`unreal-storage` inspection, artifact export, backup and offline migration.
+automatic verified legacy migration/cleanup, `unreal-storage` inspection,
+artifact export and backup. SQLite startup migrates workspace `.harness/sessions`
+and legacy files in the chosen directory. The old shared runner-default directory
+is not auto-imported: it may contain sessions from several workspaces. Migrate such
+stores explicitly only after checking their workspace ownership.
 
 You can also pass a JSON request as an argument or through stdin:
 

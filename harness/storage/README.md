@@ -61,6 +61,32 @@ within a process, plus the host writer lock across processes). Filesystem edits
 still use staged-file fsync, atomic rename/create, directory fsync, and separate
 intent/completion receipts. An uncertain interrupted edit is NOT repeated.
 
+## Automatic migration and source cleanup
+
+SQLite hosts automatically migrate idle workspace `.harness/sessions` and legacy
+files in an explicit destination. `MigrateLegacy` takes an exclusive directory
+lease; JSONL hosts hold shared leases until all logging/tools are closed. Older
+pre-lock binaries are checked via open process descriptors (Linux `/proc`, or
+`lsof` plus executable names from `ps` on other Unix hosts). Inspection failures
+fail closed. Old one-shot runners may hold no descriptor while waiting on the
+provider, so their executable name triggers a conservative busy result. Custom
+third-party writers that ignore advisory locks must be stopped by the user.
+
+Recognized source files are archived exactly, including uncommitted JSONL tails,
+and recorded in a durable `legacy-cleanup-v1` metadata manifest. Before any unlink,
+all archives are checksum-verified and imported canonical event prefixes compared
+against the source journals. Cleanup rechecks source hashes/identity and removes
+only known files, then prunes empty directories. Skills, experiments, unknown
+files and an in-place SQLite destination survive. A partial cleanup resumes from
+the manifest even if the original journals are already gone. Raw backups remain
+in compressed artifacts addressable through their original capture aliases.
+
+Unfinished shell checkpoints are rebased only after new spool copies are synced;
+old events/tool text stay unchanged. In-place migrations use fresh `.migrated`
+spool paths so a resumed command cannot mutate an immutable source capture alias.
+The lower-level `ImportLegacy` and CLI `-keep-source migrate` retain source files;
+a later normal startup can still verify and clean that already-imported history.
+
 ## Maintenance
 
 Use `unreal-storage backup` for a consistent standalone SQLite snapshot, including

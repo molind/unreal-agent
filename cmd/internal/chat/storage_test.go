@@ -123,19 +123,21 @@ func TestSQLiteConfigAndLegacyMigrationGuard(t *testing.T) {
 	if _, err = legacy.Create(t.Context(), "old"); err != nil {
 		t.Fatal(err)
 	}
-	if s, release, err := openStorage(t.Context(), c); err == nil {
-		_ = s.Close()
-		_ = release()
-		t.Fatal("silently stranded legacy history")
-	}
-	s, err := localfile.NewSQLite(want)
+	lease, err := storage.LockLegacyDirectory(source, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.ImportLegacy(t.Context(), source); err != nil {
+	if s, release, err := openStorage(t.Context(), c); err == nil {
+		_ = s.Close()
+		_ = release()
+		t.Fatal("migrated active legacy writer")
+	}
+	if _, err := os.Stat(filepath.Join(source, "old.session.jsonl")); err != nil {
+		t.Fatal("active source touched", err)
+	}
+	if err = lease.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_ = s.Close()
 	opened, release, err := openStorage(t.Context(), c)
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +146,9 @@ func TestSQLiteConfigAndLegacyMigrationGuard(t *testing.T) {
 	defer opened.Close()
 	if _, err = opened.Resume(t.Context(), session.ID("old")); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".harness")); !os.IsNotExist(err) {
+		t.Fatal("migrated .harness was not removed", err)
 	}
 }
 func TestSQLiteDiagnosticsAreRedacted(t *testing.T) {
