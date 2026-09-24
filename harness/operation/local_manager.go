@@ -331,6 +331,8 @@ func (manager *LocalOperationManager) appendLocalUpdate(operation Operation) {
 
 func advanceLocalOperation(current Operation, event *primitives.PrimitiveEvent) (Step, error) {
 	switch current.Type {
+	case TypeFile:
+		return AdvanceFile(current, event)
 	case TypeValue:
 		return AdvanceValue(current, event)
 	case TypeSkillUse:
@@ -346,6 +348,11 @@ func advanceLocalOperation(current Operation, event *primitives.PrimitiveEvent) 
 
 func failLocalOperation(current Operation, err error) Operation {
 	switch current.Type {
+	case TypeFile:
+		step, stateErr := AdvanceFile(current, &primitives.PrimitiveEvent{Type: primitives.PrimitiveEventFailed, Source: primitives.SourceID(current.ID), Result: primitives.PrimitiveFailureResult{Error: err.Error()}})
+		if stateErr == nil {
+			return *step.Operation
+		}
 	case TypeSkillUse:
 		state, stateErr := skillUseOperationState(current)
 		if stateErr == nil {

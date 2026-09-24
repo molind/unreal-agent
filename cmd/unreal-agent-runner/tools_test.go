@@ -27,8 +27,8 @@ func TestParseRequestConfiguresStaticTools(t *testing.T) {
 	for _, definition := range configured.Registry.StaticDefinitions() {
 		names = append(names, definition.Tool.Name)
 	}
-	if !slices.Equal(names, []string{"ViewImage"}) {
-		t.Fatalf("static tools = %v, want ViewImage", names)
+	if !slices.Equal(names, []string{"ViewImage", "Read", "Edit", "Write"}) {
+		t.Fatalf("static tools = %v, want ViewImage, Read, Edit, Write", names)
 	}
 	for _, name := range []string{"Bash", "SkillUse", "McpSearch", "McpCall"} {
 		if _, exists := configured.Registry.Resolve(name); exists {

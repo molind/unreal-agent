@@ -32,6 +32,11 @@ func TestRunSelectsToolsFromStartupConfiguration(t *testing.T) {
 		{name: "disallowed tools", skill: "---\nname: review\ndescription: Review code.\n---\n", disallowed: []string{"Bash", "ViewImage", "SkillUse"}, want: nil},
 		{name: "empty selection", disallowed: []string{"Bash", "ViewImage"}},
 	} {
+		if test.name == "disallowed tools" || test.name == "empty selection" {
+			test.disallowed = append(test.disallowed, "Read", "Edit", "Write")
+		} else {
+			test.want = append(test.want, "Read", "Edit", "Write")
+		}
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			if test.skill != "" {

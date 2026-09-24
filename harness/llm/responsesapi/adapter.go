@@ -28,6 +28,9 @@ type APIError struct {
 	Type       string
 }
 
+// ContextLimitExceeded allows hosts to recover without depending on this adapter.
+func (err *APIError) ContextLimitExceeded() bool { return err.Code == "context_length_exceeded" }
+
 func (err *APIError) Error() string {
 	if err.Code != "" {
 		return fmt.Sprintf("responses API error %s: %s", err.Code, err.Message)
@@ -50,6 +53,7 @@ type CacheKeyPlacement struct {
 }
 
 type Config struct {
+	Transport         Transport
 	Endpoint          string
 	Headers           map[string][]string
 	CacheKeyPlacement CacheKeyPlacement
@@ -64,6 +68,9 @@ type Config struct {
 }
 
 type adapter struct {
+	reportTransport   bool
+	transport         Transport
+	websocket         *websocketSession
 	remote            *primitives.RemoteClient
 	endpoint          string
 	headers           map[string][]string
@@ -89,7 +96,18 @@ func NewAdapter(remote *primitives.RemoteClient, config Config) (llm.Adapter, er
 	if maxAttempts <= 0 {
 		return nil, errors.New("max attempts must be positive")
 	}
-	return &adapter{
+	transport := config.Transport
+	if transport == "" {
+		transport = TransportHTTP
+	}
+	if transport != TransportHTTP && transport != TransportAuto && transport != TransportWebSocket {
+		return nil, fmt.Errorf("invalid responses transport %q", transport)
+	}
+	var ws *websocketSession
+	if transport != TransportHTTP {
+		ws = newWebsocketSession()
+	}
+	return &adapter{transport: transport, websocket: ws, reportTransport: config.Transport != "",
 		remote:            remote,
 		endpoint:          config.Endpoint,
 		headers:           config.Headers,
@@ -113,6 +131,12 @@ func (adapter *adapter) Respond(ctx context.Context, request llm.Request, option
 	if err != nil {
 		return llm.Response{}, err
 	}
+	if adapter.websocket != nil {
+		return adapter.respondWebsocket(ctx, body, key)
+	}
+	return adapter.respondHTTP(ctx, body, key, "")
+}
+func (adapter *adapter) respondHTTP(ctx context.Context, body []byte, key, fallback string) (llm.Response, error) {
 	statusCode, responseBody, err := adapter.exchange(ctx, body, key)
 	if err != nil {
 		return llm.Response{}, err
@@ -123,7 +147,15 @@ func (adapter *adapter) Respond(ctx context.Context, request llm.Request, option
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
 		return llm.Response{}, fmt.Errorf("create response: %w", providerError(statusCode, responseBody))
 	}
-	return decodeResponse(responseBody)
+	response, err := decodeResponse(responseBody)
+	if err == nil && adapter.reportTransport {
+		var fields struct {
+			Input []jsontext.Value `json:"input"`
+		}
+		_ = json.Unmarshal(body, &fields)
+		response.Transport = &llm.TransportUsage{Mode: "http", SentInputItems: len(fields.Input), TotalInputItems: len(fields.Input), RequestBytes: len(body), Fallback: fallback}
+	}
+	return response, err
 }
 
 const modelResponseIdleTimeout = 30 * time.Minute
@@ -197,4 +229,12 @@ func canceledError(ctx context.Context) error {
 		return ctx.Err()
 	}
 	return context.Canceled
+}
+
+// Close joins/cancels the persistent transport. The caller still owns RemoteClient.
+func (a *adapter) Close() error {
+	if a.websocket != nil {
+		a.websocket.close()
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"errors"
+	"io"
 	"strings"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
@@ -10,6 +11,7 @@ import (
 )
 
 type Config struct {
+	Transport   responsesapi.Transport
 	APIKey      string
 	BaseURL     string
 	MaxAttempts *int
@@ -36,7 +38,8 @@ func NewClient(config Config) (*Client, error) {
 
 	remote := primitives.NewRemoteClient()
 	adapter, err := responsesapi.NewAdapter(remote, responsesapi.Config{
-		Endpoint: baseURL + "/responses",
+		Endpoint:  baseURL + "/responses",
+		Transport: responsesapi.DefaultTransport(baseURL, config.Transport),
 		Headers: map[string][]string{
 			"Authorization": {"Bearer " + config.APIKey},
 			"Content-Type":  {"application/json"},
@@ -53,5 +56,9 @@ func NewClient(config Config) (*Client, error) {
 }
 
 func (client *Client) Close() error {
-	return client.remote.Close()
+	var err error
+	if closer, ok := client.Adapter.(io.Closer); ok {
+		err = closer.Close()
+	}
+	return errors.Join(err, client.remote.Close())
 }

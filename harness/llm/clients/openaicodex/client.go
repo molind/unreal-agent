@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 const BaseURL = "https://chatgpt.com/backend-api/codex"
 
 type Config struct {
+	Transport   responsesapi.Transport
 	AccessToken string
 	AccountID   string
 	// Read once at construction; exclusive with inline credentials.
@@ -51,7 +53,8 @@ func NewClient(config Config) (*Client, error) {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	})
 	adapter, err := responsesapi.NewAdapter(remote, responsesapi.Config{
-		Endpoint: baseURL + "/responses",
+		Endpoint:  baseURL + "/responses",
+		Transport: responsesapi.DefaultTransport(baseURL, config.Transport),
 		Headers: map[string][]string{
 			"Authorization":      {"Bearer " + credentials.accessToken},
 			"ChatGPT-Account-ID": {credentials.accountID},
@@ -85,7 +88,13 @@ func (client *Client) Respond(ctx context.Context, request llm.Request, options 
 	return response, err
 }
 
-func (client *Client) Close() error { return client.remote.Close() }
+func (client *Client) Close() error {
+	var err error
+	if closer, ok := client.adapter.(io.Closer); ok {
+		err = closer.Close()
+	}
+	return errors.Join(err, client.remote.Close())
+}
 
 func validateBaseURL(value string) (string, error) {
 	value = strings.TrimRight(strings.TrimSpace(value), "/")

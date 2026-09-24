@@ -22,6 +22,7 @@ const help = `Enter a complete line to send a message (also while work is runnin
 /new           Stop current work and open a fresh unsaved chat
 /resume [ID]   Choose a saved session, or stop/join and resume the exact ID
 /cancel ID     Cancel only this operation
+/compact       Reopen the compaction approval menu (plain mode: /compact yes|no)
 /stop          Stop all current work; keep history; no automatic retry
 /exit, /quit   Stop work and exit (EOF also exits)
 Terminal: arrows/Ctrl-B/F move; Home/End or Ctrl-A/E; Backspace/Delete;
@@ -43,6 +44,14 @@ exceeding either rejects the whole draft explicitly, never sends a prefix.
 Async output preserves the draft/cursor.
 On capable terminals replies render headings, emphasis, lists, links and code.
 Tool notices are compact; /status retains full commands and operation IDs.
+Context size is informational; no context-window limit or percentage is assumed.
+The first context_length_exceeded error triggers one automatic rolling compaction.
+If the retry or summary still exceeds context, a Yes/No menu requests approval
+for one additional attempt. No is selected by default; Up/Down and Enter choose,
+Esc defers. /compact reopens it. Without a TTY use /compact yes or /compact no.
+New text is queued, not approval.
+Original history stays on disk; recent input and active call/result pairs stay intact.
+A context/summary failure stops work but keeps the chat open for /new or /resume.
 A quiet model/workspace row separates the editable prompt from the transcript.
 NO_COLOR disables styling, not editing/layout. Pipes remain plain Markdown.
 Command and diagnostic log paths are shown at startup and /status.
@@ -58,6 +67,7 @@ substitutes another ID. Tools run with your local permissions.
 const systemPrompt = `You are an interactive coding assistant working in the local workspace.
 Discussion, questions, and requests to explain code are NOT permission to edit files or run mutating commands.
 Explicit requests to implement or fix authorize relevant edits and tests. Clarify ambiguous requests.
+Prefer Read for text files, Edit for targeted changes, and Write for whole-file creation/replacement. Do not use shell/Python file-edit scripts when these structured tools can perform the change. Read returns a short revision; use it for Edit/Write and re-read after a conflict. Bash is for commands, builds and tests.
 Tools execute with the local process permissions; there is no isolated sandbox and no enforced read-only mode.
 Never expose credentials or private reasoning. Do not read credential files to answer the user.
 This is an ongoing chat: an ordinary reply ends only your response, not the application.
@@ -68,6 +78,7 @@ type config struct {
 	workspace, directory, session, provider, model, effort, baseURL string
 	attempts                                                        int
 	prompt                                                          string
+	transport                                                       string
 }
 
 func parse(args []string, getenv func(string) string, out io.Writer) (config, error) {
@@ -83,6 +94,7 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 	f.StringVar(&c.provider, "provider", env("UNREAL_HARNESS_LLM_PROVIDER", "openai-codex"), "provider: openai-codex, openai, ollama, openrouter, fireworks")
 	f.StringVar(&c.model, "model", env("UNREAL_HARNESS_LLM_MODEL", "gpt-6-astra"), "model name")
 	f.StringVar(&c.effort, "reasoning-effort", env("UNREAL_HARNESS_LLM_REASONING_EFFORT", "xhigh"), "reasoning effort: low, medium, high, xhigh, max")
+	f.StringVar(&c.transport, "transport", getenv("UNREAL_HARNESS_LLM_TRANSPORT"), "auto, websocket, or http; default auto on first-party OpenAI/Codex, HTTP on custom endpoints")
 	f.StringVar(&c.baseURL, "base-url", getenv("UNREAL_HARNESS_LLM_BASE_URL"), "provider base URL override")
 	// URLs may include credentials. Keep their environment value out of -h.
 	f.Lookup("base-url").DefValue = ""
@@ -97,6 +109,14 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 	}
 	if err := f.Parse(args); err != nil {
 		return c, err
+	}
+	switch c.transport {
+	case "", "auto", "http", "websocket":
+	default:
+		return c, errors.New("invalid -transport; use auto, websocket or http")
+	}
+	if c.transport != "" && c.provider != "openai" && c.provider != "openai-codex" {
+		return c, errors.New("-transport is available for openai and openai-codex")
 	}
 	if f.NArg() > 1 {
 		return c, errors.New("expected at most one workspace argument (flags must precede workspace)")
@@ -154,6 +174,13 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 }
 
 func (c config) client(providers []agentrunner.Provider, getenv func(string) string) (agentrunner.Client, error) {
+	environment := getenv
+	getenv = func(name string) string {
+		if name == "UNREAL_HARNESS_LLM_TRANSPORT" {
+			return c.transport
+		}
+		return environment(name)
+	}
 	for _, p := range providers {
 		if p.Name != c.provider {
 			continue

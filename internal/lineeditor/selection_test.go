@@ -143,3 +143,39 @@ func TestSelectionReusableQuestion(t *testing.T) {
 		}
 	}
 }
+
+func TestScopedAsyncChooserDoesNotReplaceAnotherMenu(t *testing.T) {
+	for _, keys := range []string{"\r", "\x1b\x1b"} {
+		wire := &selectionWire{input: strings.NewReader(keys)}
+		term := NewTerminal(wire, "you> ")
+		if err := term.OpenSelection("Resume", []Choice{{Value: "session-1", Label: "Existing session"}}); err != nil {
+			t.Fatal(err)
+		}
+		if opened, err := term.TryOpenSelection("approval-1", "Compact?", []Choice{{Value: "no"}}); opened || err != nil {
+			t.Fatal("replaced an active chooser", opened, err)
+		}
+		if err := term.CloseSelectionID("approval-1"); err != nil {
+			t.Fatal(err)
+		}
+		if term.selection == nil || term.selection.title != "Resume" {
+			t.Fatal("scoped close removed resume menu")
+		}
+		if err := term.CloseSelection(); err != nil {
+			t.Fatal(err)
+		}
+		if opened, err := term.TryOpenSelection("approval-1", "Compact?", []Choice{{Value: "no", Label: "No"}, {Value: "yes", Label: "Yes"}}); !opened || err != nil {
+			t.Fatal(opened, err)
+		}
+		_, err := term.ReadLine()
+		var result *Selection
+		if !errors.As(err, &result) || result.Context != "approval-1" {
+			t.Fatal("lost question identity", err)
+		}
+		if keys == "\r" && result.Value != "no" {
+			t.Fatal("unsafe default")
+		}
+		if keys != "\r" && (!result.Canceled || result.Value != "") {
+			t.Fatal("Escape granted a choice")
+		}
+	}
+}

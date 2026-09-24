@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/unreallabsai/unreal-agent/cmd/internal/agentrunner"
+	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
@@ -106,7 +107,8 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 	}
 	if ui != nil {
 		info := fmt.Sprintf("%s / %s | %s | /help", c.model, c.effort, filepath.Base(c.workspace))
-		if err := ui.editor.SetPromptInfo(d.safe(info), d.color); err != nil {
+		d.promptInfo = d.safe(info)
+		if err := d.updatePrompt(); err != nil {
 			return boundary("terminal prompt", err)
 		}
 	}
@@ -228,6 +230,24 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 			}
 			a.runtime = nil
 			if err != nil {
+				if recoverableContextError(err) {
+					if ui != nil && a.approvalMenuShown != "" {
+						if outputErr := ui.editor.CloseSelectionID(compactionMenuID(a.approvalMenuShown)); outputErr != nil {
+							return outputErr
+						}
+					}
+					a.approvalMenuShown = ""
+					d.generating = false
+					d.contextStatus.Compacting = false
+					d.contextStatus.ApprovalID = ""
+					if outputErr := d.print("Context work stopped: %v\nHistory retained. Use /new for a shorter conversation, /resume to switch, or a new message to retry compaction.\n", err); outputErr != nil {
+						return outputErr
+					}
+					if outputErr := d.tick(0); outputErr != nil {
+						return outputErr
+					}
+					continue
+				}
 				return runtimeError(err)
 			}
 		case l := <-lines:
@@ -241,6 +261,9 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 			}
 			if exit {
 				return nil
+			}
+			if err := a.offerCompactionMenu(); err != nil {
+				return err
 			}
 			if ui != nil {
 				select {
@@ -263,14 +286,16 @@ type line struct {
 	err       error
 }
 type application struct {
-	ctx     context.Context
-	config  config
-	store   *localfile.Store
-	id      session.ID
-	display *display
-	client  agentrunner.Client
-	runtime *runtime
-	logs    *logs
+	ctx               context.Context
+	config            config
+	store             *localfile.Store
+	id                session.ID
+	display           *display
+	client            agentrunner.Client
+	runtime           *runtime
+	logs              *logs
+	approvalMenuShown string
+	stopping          bool
 }
 
 func runtimeError(err error) error {
@@ -288,6 +313,18 @@ func (a *application) start() error {
 	return a.logs.event("runtime", "started", a.id, "", nil)
 }
 func (a *application) event(e event) error {
+	if e.context != nil {
+		oldID := a.display.contextStatus.ApprovalID
+		if oldID != "" && oldID != e.context.ApprovalID && a.display.ui != nil {
+			if err := a.display.ui.editor.CloseSelectionID(compactionMenuID(oldID)); err != nil {
+				return err
+			}
+		}
+		if err := a.display.context(*e.context); err != nil {
+			return err
+		}
+		return a.offerCompactionMenu()
+	}
 	if e.idle != nil {
 		a.runtime.idle = *e.idle
 		return nil
@@ -334,11 +371,18 @@ func (a *application) interrupt() (bool, error) {
 }
 
 func (a *application) stop() error {
+	a.stopping = true
+	defer func() { a.stopping = false }()
+	var menuErr error
+	if a.display.ui != nil && a.approvalMenuShown != "" {
+		menuErr = a.display.ui.editor.CloseSelectionID(compactionMenuID(a.approvalMenuShown))
+	}
+	a.approvalMenuShown = ""
 	r := a.runtime
 	if r == nil {
-		return nil
+		return menuErr
 	}
-	logErr := a.logs.event("runtime", "stop_requested", a.id, "", nil)
+	logErr := errors.Join(menuErr, a.logs.event("runtime", "stop_requested", a.id, "", nil))
 	if logErr != nil {
 		r.cancel()
 	}
@@ -357,6 +401,8 @@ func (a *application) stop() error {
 	err := <-r.done
 	a.runtime = nil
 	a.display.generating = false
+	a.display.contextStatus.Compacting = false
+	a.display.contextStatus.ApprovalID = ""
 	outputErr = errors.Join(outputErr, a.display.tick(0))
 	if err != nil && a.ctx.Err() == nil {
 		return errors.Join(outputErr, runtimeError(err))
@@ -369,6 +415,7 @@ func (a *application) announce() error {
 		id = "(unsaved; first message saves)"
 	}
 	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\nCommand logs: %s\nDiagnostic log: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort, filepath.Join(a.logs.directory, "commands"), a.logs.diagnostic)
+	text += "Context: recover on provider overflow; repeated compaction requires approval.\n"
 	if a.display.ui != nil {
 		return a.display.write("\n" + paint(a.display.color, "1", "  unreal chat") + "\n" + paint(a.display.color, "2", a.display.safe(text)) + "\n")
 	}
@@ -388,6 +435,9 @@ func openSession(ctx context.Context, store *localfile.Store, requested string) 
 func (a *application) replay() error {
 	if a.id == "" {
 		a.display.reset()
+		if err := a.display.tick(0); err != nil {
+			return err
+		}
 		return a.display.print("Selected session: new unsaved chat (no user messages).\n")
 	}
 	topic, err := sessionTopic(a.ctx, a.store, a.id, a.display.safe)
@@ -398,6 +448,9 @@ func (a *application) replay() error {
 		return err
 	}
 	a.display.reset()
+	if err := a.display.tick(0); err != nil {
+		return err
+	}
 	after := sessionstore.BeforeFirst
 	for {
 		page, err := a.store.Items(a.ctx, a.id, after, 256)
@@ -437,7 +490,7 @@ func isCommand(text string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/status", "/sessions", "/new", "/resume", "/cancel", "/stop", "/exit", "/quit":
+	case "/help", "/status", "/sessions", "/new", "/resume", "/cancel", "/compact", "/stop", "/exit", "/quit":
 		return true
 	}
 	return false
@@ -454,7 +507,7 @@ func (a *application) command(text string) (bool, error) {
 	case "/cancel":
 		want = 2
 	}
-	if name == "/resume" && len(fields) == 2 {
+	if (name == "/resume" || name == "/compact") && len(fields) == 2 {
 		want = 2
 	}
 	if len(fields) != want {
@@ -486,6 +539,12 @@ func (a *application) command(text string) (bool, error) {
 			return false, a.display.print("Cannot cancel operation %s: %v\n", id, err)
 		}
 		return false, a.display.print("Cancellation requested for %s.\n", id)
+	case "/compact":
+		decision := ""
+		if len(fields) == 2 {
+			decision = fields[1]
+		}
+		return false, a.compactApproval(decision)
 	case "/stop":
 		if err := a.stop(); err != nil {
 			return false, err
@@ -547,6 +606,12 @@ func (a *application) accept(l line) (bool, error) {
 		return a.interrupt()
 	}
 	if l.selection != nil {
+		if strings.HasPrefix(l.selection.Context, "compaction:") {
+			return false, a.acceptCompactionSelection(l.selection)
+		}
+		if l.selection.Context != "" {
+			return false, a.display.print("Ignored an obsolete menu selection.\n")
+		}
 		if l.selection.Canceled {
 			return false, nil
 		}
@@ -592,5 +657,97 @@ func (a *application) accept(l line) (bool, error) {
 		}
 		a.runtime.pendingInputs++
 	}
+	if a.display.contextStatus.ApprovalID != "" {
+		if a.display.ui != nil {
+			return false, a.display.print("Message queued. Compaction is awaiting your choice; /compact reopens the menu.\n")
+		}
+		return false, a.display.print("Message queued. Further compaction still requires /compact yes; /compact no stops the work.\n")
+	}
 	return false, boundary("output", a.display.working())
+}
+
+// Do not swallow a simultaneous storage/log/output failure just because another
+// branch of errors.Join contains a recoverable context failure.
+func recoverableContextError(err error) bool {
+	var diagnostic *diagnosticWriteError
+	if errors.As(err, &diagnostic) {
+		return false
+	}
+	for err != nil {
+		if _, ok := err.(*contextbuilder.LimitError); ok {
+			return true
+		}
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			children := joined.Unwrap()
+			if len(children) != 1 {
+				return false
+			}
+			err = children[0]
+		} else {
+			err = errors.Unwrap(err)
+		}
+	}
+	return false
+}
+
+// Only an explicit local command can grant a single request-scoped permission.
+// Approval is a durable control, never a model/user message or an inferred yes.
+func (a *application) compactApproval(decision string) error {
+	if decision != "" && decision != "yes" && decision != "no" {
+		return a.display.print("Usage: /compact yes or /compact no.\n")
+	}
+	id := a.display.contextStatus.ApprovalID
+	if id == "" || a.runtime == nil {
+		return a.display.print("No compaction approval pending.\n")
+	}
+	switch decision {
+	case "":
+		if a.display.ui != nil {
+			a.approvalMenuShown = ""
+			return a.offerCompactionMenu()
+		}
+		return a.display.print("Context still exceeds the provider limit. Compress another older chunk? /compact yes approves one attempt; /compact no stops work.\n")
+	case "no":
+		if err := a.stop(); err != nil {
+			return err
+		}
+		return a.display.print("Further compaction declined. Work stopped; history retained. Use /new for a fresh conversation.\n")
+	default:
+		control := newInput(inbox.InputControl, inbox.ControlMessage{Mode: inbox.ApproveCompaction, Parameters: inbox.ContextRecovery{RequestID: id}})
+		if err := a.runtime.inputs.Submit(a.ctx, control); err != nil {
+			return runtimeError(err)
+		}
+		return a.display.print("Approval submitted for one additional compaction attempt.\n")
+	}
+}
+
+func compactionMenuID(requestID string) string { return "compaction:" + requestID }
+
+func (a *application) offerCompactionMenu() error {
+	id := a.display.contextStatus.ApprovalID
+	if a.display.ui == nil || a.runtime == nil || a.stopping || id == "" || a.approvalMenuShown == id {
+		return nil
+	}
+	opened, err := a.display.ui.editor.TryOpenSelection(compactionMenuID(id), "Compact again?", []lineeditor.Choice{
+		{Value: "no", Label: "No - stop work", Detail: "Keep history; do not compress again. Esc defers."},
+		{Value: "yes", Label: "Yes - compact once", Detail: "Approve one attempt; recent work stays unchanged."},
+	})
+	if opened {
+		a.approvalMenuShown = id
+	}
+	return err
+}
+
+func (a *application) acceptCompactionSelection(selected *lineeditor.Selection) error {
+	id := strings.TrimPrefix(selected.Context, "compaction:")
+	if id == "" || id != a.display.contextStatus.ApprovalID || a.runtime == nil {
+		return a.display.print("Ignored an obsolete compaction choice.\n")
+	}
+	if selected.Canceled {
+		return a.display.print("Compaction decision deferred. No permission granted; /compact reopens the menu.\n")
+	}
+	if selected.Value != "yes" && selected.Value != "no" {
+		return a.display.print("Invalid compaction choice.\n")
+	}
+	return a.compactApproval(selected.Value)
 }

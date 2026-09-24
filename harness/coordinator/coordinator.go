@@ -15,6 +15,11 @@ import (
 )
 
 type Dependencies struct {
+	// Opt in to error-driven context recovery. No model limit is assumed.
+	RecoverContext bool
+	// Called on the coordinator goroutine; observers must not reenter it.
+	OnContextChange func(contextbuilder.Status)
+
 	// OnIdleChange observes settled scheduling state, initially and on changes.
 	// Idle means no pending input, model request, or tool work. Called on the
 	// Run goroutine; the observer must not reenter the coordinator.

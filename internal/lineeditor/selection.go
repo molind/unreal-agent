@@ -15,6 +15,8 @@ type Choice struct{ Value, Label, Detail string }
 // Selection is returned by ReadLine instead of a submitted line. Canceled
 // means Escape dismissed the chooser. It is never added to editing history.
 type Selection struct {
+	// Context identifies a scoped asynchronous chooser, including Escape results.
+	Context  string
 	Value    string
 	Canceled bool
 }
@@ -22,6 +24,7 @@ type Selection struct {
 func (*Selection) Error() string { return "terminal selection" }
 
 type selection struct {
+	id         string
 	title      string
 	choices    []Choice
 	index, top int
@@ -125,7 +128,7 @@ func (t *Terminal) selectionKey(key rune) *Selection {
 	case keyDown, keyHistoryNext:
 		s.index = min(len(s.choices)-1, s.index+1)
 	case keyEnter, keyLF, keyEscape:
-		result := &Selection{Canceled: key == keyEscape}
+		result := &Selection{Context: s.id, Canceled: key == keyEscape}
 		if key != keyEscape {
 			result.Value = s.choices[s.index].Value
 		}
@@ -142,6 +145,37 @@ func (t *Terminal) CloseSelection() error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	if t.selection == nil {
+		return nil
+	}
+	t.selection = nil
+	t.repaint(t.statusRows(len(t.line)))
+	_, err := t.c.Write(t.outBuf)
+	t.outBuf = t.outBuf[:0]
+	return err
+}
+
+// TryOpenSelection may be called while ReadLine waits for input. It never
+// replaces another chooser. Results retain id even on Escape, so a delayed
+// event cannot be mistaken for a different question or a session selection.
+func (t *Terminal) TryOpenSelection(id, title string, choices []Choice) (bool, error) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	if t.selection != nil || len(choices) == 0 {
+		return false, nil
+	}
+	t.selection = &selection{id: id, title: title, choices: slices.Clone(choices)}
+	t.repaint(0)
+	_, err := t.c.Write(t.outBuf)
+	t.outBuf = t.outBuf[:0]
+	return true, err
+}
+
+// CloseSelectionID dismisses only the matching scoped question. In particular,
+// clearing an obsolete approval must not close an unrelated resume chooser.
+func (t *Terminal) CloseSelectionID(id string) error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	if t.selection == nil || t.selection.id != id {
 		return nil
 	}
 	t.selection = nil

@@ -397,6 +397,7 @@ type stopTestCall struct {
 	ctx      context.Context
 	request  llm.Request
 	response chan llm.Response
+	failure  chan error
 }
 
 type stopTestRun struct {
@@ -413,11 +414,13 @@ func newStopTestRun(t *testing.T, pending int) *stopTestRun {
 	store, registry := independentToolCalls(t, pending)
 	run := &stopTestRun{store: store, inputs: newTestInbox(t), operations: newFakeOperationManager(), done: make(chan error, 1)}
 	adapter := &fakeAdapter{respond: func(ctx context.Context, request llm.Request) (llm.Response, error) {
-		call := stopTestCall{ctx: ctx, request: request, response: make(chan llm.Response)}
+		call := stopTestCall{ctx: ctx, request: request, response: make(chan llm.Response), failure: make(chan error)}
 		run.calls = append(run.calls, call)
 		select {
 		case response := <-call.response:
 			return response, nil
+		case err := <-call.failure:
+			return llm.Response{}, err
 		case <-ctx.Done():
 			return llm.Response{}, ctx.Err()
 		}

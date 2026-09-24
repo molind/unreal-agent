@@ -11,6 +11,7 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
@@ -29,11 +30,15 @@ const (
 const toolCallRunGracePeriod = time.Second
 
 type coordinator struct {
-	dependencies Dependencies
-	state        loopState
-	stop         stopState
-	cancelModel  context.CancelFunc
-	models       sync.WaitGroup
+	dependencies    Dependencies
+	state           loopState
+	stop            stopState
+	cancelModel     context.CancelFunc
+	models          sync.WaitGroup
+	contextPlans    map[session.TurnID]session.ContextCompaction
+	contextStatus   contextbuilder.Status
+	contextNotified bool
+	recovery        contextRecovery
 }
 
 type stopState struct {
@@ -94,6 +99,9 @@ func (current *coordinator) Run(ctx context.Context) error {
 	if err := current.restore(ctx); err != nil {
 		return err
 	}
+	if !current.dependencies.RecoverContext && current.recovery.approvalID != "" {
+		return &contextbuilder.LimitError{Reason: "session is waiting for compaction approval; resume it in an interactive context-recovery host"}
+	}
 
 	modelContext, cancelModels := context.WithCancel(ctx)
 	defer func() {
@@ -117,7 +125,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 	if err := current.dispatchOperationsToManager(); err != nil {
 		return err
 	}
-	if !current.state.discardPending && (toolCallStatusesRequireModelResponse(statuses) || current.pendingInputs() > 0) {
+	if !current.state.discardPending && current.recovery.approvalID == "" && (toolCallStatusesRequireModelResponse(statuses) || current.pendingInputs() > 0 || current.recovery.needsCompaction) {
 		err = current.requestModelResponse(modelContext, modelResponses)
 		if err != nil {
 			return err
@@ -128,6 +136,9 @@ func (current *coordinator) Run(ctx context.Context) error {
 	var previousIdle bool
 	firstIdle := true
 	for {
+		if err := current.notifyContext(); err != nil {
+			return err
+		}
 		if notify := current.dependencies.OnIdleChange; notify != nil {
 			idle := current.isIdle()
 			if firstIdle || idle != previousIdle {
@@ -224,7 +235,12 @@ func (current *coordinator) processEvents(ctx context.Context) (bool, error) {
 	if _, err := current.reconcileToolCalls(ctx); err != nil {
 		return false, err
 	}
-	return !current.state.discardPending && (current.state.callModel || (current.pendingInputs() > 0 && current.cancelModel == nil && len(current.state.graceToolCalls) == 0)), nil
+	// Steering is queued during maintenance rather than spending another
+	// compaction attempt by canceling/restarting the summarizer. Stop still wins.
+	if _, maintenance := current.contextPlans[current.state.currentTurnID]; maintenance && current.cancelModel != nil {
+		return false, nil
+	}
+	return !current.state.discardPending && current.recovery.approvalID == "" && (current.state.callModel || (current.pendingInputs() > 0 && current.cancelModel == nil && len(current.state.graceToolCalls) == 0)), nil
 }
 
 func (current *coordinator) processInputs(ctx context.Context, inputs []inbox.Input) error {
@@ -242,8 +258,16 @@ func (current *coordinator) processOperations(ctx context.Context, updates []ope
 
 func (current *coordinator) processModelResponse(ctx context.Context, modelResponse modelResponseResult) error {
 	current.interruptModel()
+	// Recovery-enabled hosts treat an in-band failed response as an error,
+	// including HTTP context overflow. Other hosts retain response-as-data semantics.
+	if current.dependencies.RecoverContext && modelResponse.err == nil && modelResponse.response.Failure != nil {
+		modelResponse.err = modelResponse.response.Failure
+	}
 	if modelResponse.err != nil {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if handled, err := current.contextFailure(ctx, modelResponse.err); handled {
 			return err
 		}
 		return fmt.Errorf("call model for turn %q: %w", modelResponse.turnID, modelResponse.err)
@@ -254,6 +278,10 @@ func (current *coordinator) processModelResponse(ctx context.Context, modelRespo
 	})
 	if err != nil {
 		return err
+	}
+	if _, compacted := current.contextPlans[modelResponse.turnID]; compacted {
+		current.state.callModel = true // Maintenance never consumes pending user/tool input.
+		return nil
 	}
 	for _, status := range statuses {
 		for _, value := range status.Operations {
@@ -292,12 +320,12 @@ func (current *coordinator) handleStop() (bool, error) {
 }
 
 func (current *coordinator) isIdle() bool {
-	return current.cancelModel == nil && current.pendingInputs() == 0 &&
+	return current.recovery.approvalID == "" && current.cancelModel == nil && current.pendingInputs() == 0 &&
 		len(current.state.toolCalls) == 0 && !current.hasPendingOperations()
 }
 
 func (current *coordinator) isWaitingForOnlyToolCalls() bool {
-	return current.cancelModel == nil && !current.stopping() &&
+	return current.recovery.approvalID == "" && current.cancelModel == nil && !current.stopping() &&
 		current.pendingInputs() == 0 && len(current.state.toolCalls) != 0
 }
 
@@ -374,10 +402,21 @@ func (current *coordinator) requestModelResponse(
 	if err != nil {
 		return fmt.Errorf("build model request: %w", err)
 	}
+	if err := current.notifyContext(); err != nil {
+		return err
+	}
+	request, plan, err := current.recoveryRequest(built.Request)
+	if err != nil {
+		return err
+	}
 	turn := session.Turn{
 		ID:             session.TurnID(uuid.New().String()),
 		PreviousTurnID: current.state.currentTurnID,
 		Type:           session.TurnRegular,
+		Compaction:     plan,
+	}
+	if plan != nil {
+		turn.Type = session.TurnCompaction
 	}
 	item, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemTurn,
@@ -396,7 +435,7 @@ func (current *coordinator) requestModelResponse(
 	current.models.Add(1)
 	go func() {
 		defer current.models.Done()
-		response, err := current.dependencies.LLM.Respond(requestContext, built.Request, llm.RequestOptions{
+		response, err := current.dependencies.LLM.Respond(requestContext, request, llm.RequestOptions{
 			CacheKey: string(current.dependencies.SessionID),
 		})
 		select {
@@ -428,6 +467,11 @@ func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.In
 			return err
 		}
 		switch request.Mode {
+		case inbox.ApproveCompaction:
+			if current.recovery.needsCompaction && !current.stopping() {
+				current.state.callModel = true
+			}
+			return nil
 		case inbox.UpdateSettings:
 			return nil
 		case inbox.StopHard, inbox.StopWhenIdle, inbox.StopAndDiscard:
@@ -478,6 +522,9 @@ func (current *coordinator) handleModelResponse(
 	ctx context.Context,
 	response sessionstore.ModelResponse,
 ) ([]sessionstore.ToolCallStatus, error) {
+	if plan, ok := current.contextPlans[response.TurnID]; ok {
+		return nil, current.saveCompaction(ctx, response, plan)
+	}
 	item, err := current.addItemToLocalState(sessionstore.Item{
 		Kind: sessionstore.ItemModelResponse,
 		Data: response,
@@ -629,6 +676,7 @@ func (current *coordinator) addItemToLocalState(
 				// or a new model instruction while waiting for external input.
 				return item, nil
 			}
+			current.applyContextControl(request)
 			current.dependencies.ContextBuilder.AddControlMessage(request)
 			if request.Mode == inbox.Heartbeat {
 				current.state.availableInputs++
@@ -652,6 +700,21 @@ func (current *coordinator) addItemToLocalState(
 				item.Data,
 			)
 		}
+		if turn.Compaction != nil {
+			if turn.Compaction.Version != 1 || turn.Compaction.PrefixItems < 1 || turn.Compaction.SummaryTokens < 1 {
+				return sessionstore.Item{}, fmt.Errorf("invalid or unsupported context compaction checkpoint")
+			}
+			if turn.Type != session.TurnCompaction {
+				return sessionstore.Item{}, fmt.Errorf("compaction metadata on ordinary turn")
+			}
+			if current.contextPlans == nil {
+				current.contextPlans = make(map[session.TurnID]session.ContextCompaction)
+			}
+			current.contextPlans[turn.ID] = *turn.Compaction
+			// Permission is spent when the maintenance turn starts, not on success.
+			current.recovery.used = true
+			current.recovery.needsCompaction = false
+		}
 		current.state.currentTurnID = turn.ID
 		current.state.currentTurnType = turn.Type
 		current.state.currentTurnInputs = current.state.availableInputs
@@ -665,6 +728,21 @@ func (current *coordinator) addItemToLocalState(
 				item.Data,
 			)
 		}
+		if plan, ok := current.contextPlans[response.TurnID]; ok {
+			b, supported := current.dependencies.ContextBuilder.(contextbuilder.Compactor)
+			if !supported {
+				return sessionstore.Item{}, fmt.Errorf("context builder cannot restore compaction checkpoints")
+			}
+			text, err := contextbuilder.CompactionSummary(response.Response)
+			if err != nil {
+				return sessionstore.Item{}, err
+			}
+			if err := b.ApplyCompaction(plan, text); err != nil {
+				return sessionstore.Item{}, err
+			}
+			current.recovery.maxPrefixItems = 0
+			return item, nil
+		}
 		if current.state.currentTurnType == session.TurnCompaction && response.TurnID == current.state.currentTurnID {
 			return item, nil
 		}
@@ -672,6 +750,9 @@ func (current *coordinator) addItemToLocalState(
 		current.dependencies.ContextBuilder.AddModelResponse(response.Response)
 		if response.TurnID == current.state.currentTurnID {
 			current.state.deliveredInputs = current.state.currentTurnInputs
+			if response.Response.Failure == nil {
+				current.recovery = contextRecovery{}
+			}
 		}
 		current.addToolCallsToLocalState(response)
 

@@ -115,12 +115,24 @@ const (
 	StopRefused         StopReason = "refused"
 )
 
+// TransportUsage contains counters only, never headers, credentials or bodies.
+type TransportUsage struct {
+	Mode            string
+	Incremental     bool
+	Reused          bool
+	SentInputItems  int
+	TotalInputItems int
+	RequestBytes    int
+	Fallback        string `json:",omitempty"`
+}
+
 type Response struct {
-	ID      string
-	Stop    StopReason
-	Output  []Item `json:",omitzero"`
-	Usage   Usage
-	Failure *Failure
+	Transport *TransportUsage `json:",omitempty"`
+	ID        string
+	Stop      StopReason
+	Output    []Item `json:",omitzero"`
+	Usage     Usage
+	Failure   *Failure
 }
 
 // InputTokens includes CachedInputTokens and CacheWriteInputTokens.
@@ -138,3 +150,11 @@ type Failure struct {
 	Code    string
 	Message string
 }
+
+func (f *Failure) Error() string {
+	if f.Code == "" {
+		return "model response failed: " + f.Message
+	}
+	return "model response failed (" + f.Code + "): " + f.Message
+}
+func (f *Failure) ContextLimitExceeded() bool { return f.Code == "context_length_exceeded" }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 	"github.com/unreallabsai/unreal-agent/internal/lineeditor"
 )
 
@@ -152,5 +153,40 @@ func TestPlainLifecycleAndReplay(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "\x1b") {
 		t.Fatal("cursor/color in pipe")
+	}
+}
+
+func TestToolMarkersHaveOneSpaceOnEachSide(t *testing.T) {
+	for _, color := range []bool{false, true} {
+		t.Run(fmt.Sprint(color), func(t *testing.T) {
+			var output, screen bytes.Buffer
+			d := newDisplay(&output, func(string) string { return "" })
+			d.color = color
+			d.ui = &terminalUI{editor: lineeditor.NewTerminal(&screen, "you> ")}
+			for _, status := range []operation.Status{operation.StatusCompleted, operation.StatusFailed, operation.StatusCanceled} {
+				if err := d.operation(operation.Operation{ID: operation.ID(status), Status: status}, "Bash: command", false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d.calls["turn/call"] = "Bash: invalid"
+			if err := d.item(sessionstore.Item{Kind: sessionstore.ItemToolCallStatus, Data: sessionstore.ToolCallStatus{
+				TurnID: "turn", CallID: "call", Status: tool.CallStatus{Error: "invalid arguments"},
+			}}, false); err != nil {
+				t.Fatal(err)
+			}
+			text := terminalStyle.ReplaceAllString(output.String(), "")
+			count := 0
+			for _, line := range strings.Split(text, "\n") {
+				if strings.ContainsAny(line, "✓✗–") {
+					count++
+					if !regexp.MustCompile(`^ [✓✗–] Bash:`).MatchString(line) {
+						t.Fatalf("unbalanced marker padding: %q", line)
+					}
+				}
+			}
+			if count != 4 {
+				t.Fatalf("marker lines = %d, want 4", count)
+			}
+		})
 	}
 }

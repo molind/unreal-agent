@@ -11,9 +11,11 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
 )
 
@@ -30,14 +32,19 @@ type operationNotice struct {
 	started            time.Time
 }
 type display struct {
-	out        io.Writer
-	secrets    []string
-	operations map[operation.ID]operationNotice
-	calls      map[string]string
-	generating bool
-	started    time.Time
-	color      bool
-	ui         *terminalUI
+	out             io.Writer
+	secrets         []string
+	operations      map[operation.ID]operationNotice
+	calls           map[string]string
+	generating      bool
+	started         time.Time
+	color           bool
+	ui              *terminalUI
+	contextStatus   contextbuilder.Status
+	contextKnown    bool
+	promptInfo      string
+	compactionTurns map[session.TurnID]bool
+	transport       *llm.TransportUsage
 }
 
 func newDisplay(out io.Writer, getenv func(string) string) *display {
@@ -56,6 +63,10 @@ func (d *display) reset() {
 	d.operations = make(map[operation.ID]operationNotice)
 	d.calls = make(map[string]string)
 	d.generating = false
+	d.contextStatus = contextbuilder.Status{}
+	d.contextKnown = false
+	d.compactionTurns = make(map[session.TurnID]bool)
+	d.transport = nil
 }
 func (d *display) safe(s string) string {
 	for _, secret := range d.secrets {
@@ -84,6 +95,11 @@ func (d *display) write(text string) error {
 }
 func (d *display) item(item sessionstore.Item, replay bool) error {
 	switch v := item.Data.(type) {
+	case session.Turn:
+		if v.Type == session.TurnCompaction {
+			d.compactionTurns[v.ID] = true
+		}
+
 	case inbox.Input:
 		if v.Kind == inbox.InputExternal && replay {
 			var text string
@@ -93,7 +109,15 @@ func (d *display) item(item sessionstore.Item, replay bool) error {
 			return d.message("you", text)
 		}
 	case sessionstore.ModelResponse:
+		// Maintenance is not an assistant answer, including replay.
+		if d.compactionTurns[v.TurnID] {
+			return nil
+		}
 		d.generating = false
+		if v.Response.Transport != nil {
+			value := *v.Response.Transport
+			d.transport = &value
+		}
 		for _, output := range v.Response.Output {
 			switch value := output.Data.(type) {
 			case llm.Message:
@@ -122,7 +146,7 @@ func (d *display) item(item sessionstore.Item, replay bool) error {
 		if !replay && v.Status.Error != "" {
 			var err error
 			if d.ui != nil {
-				err = d.write("  " + paint(d.color, "31", "✗") + " " + commandSummary(d.safe(desc), max(12, d.columns()-5)) + "\n" + wrapProse(d.safe("failed: "+v.Status.Error), "    ", d.columns()-1))
+				err = d.write(" " + paint(d.color, "31", "✗") + " " + commandSummary(d.safe(desc), max(12, d.columns()-4)) + "\n" + wrapProse(d.safe("failed: "+v.Status.Error), "   ", d.columns()-1))
 			} else {
 				err = d.print("tool call %s failed: %s (%s)\n", v.CallID, desc, v.Status.Error)
 			}
@@ -180,19 +204,25 @@ func (d *display) operation(op operation.Operation, desc string, replay bool) er
 			marker, color = "–", "33"
 		}
 		duration := fmt.Sprintf("%.1fs", time.Since(started).Seconds())
-		label := commandSummary(d.safe(desc), max(8, d.columns()-len(duration)-9))
-		text := "  " + paint(d.color, color, marker) + " " + label + "  " + paint(d.color, "2", duration) + "\n"
+		label := commandSummary(d.safe(desc), max(8, d.columns()-len(duration)-8))
+		text := " " + paint(d.color, color, marker) + " " + label + "  " + paint(d.color, "2", duration) + "\n"
 		if state != "completed" {
 			id := []rune(d.safe(string(op.ID)))
 			details := state + " · " + string(id[:min(8, len(id))]) + " · /status for details"
-			text += paint(d.color, "2", wrapProse(details, "    ", d.columns()-1))
+			text += paint(d.color, "2", wrapProse(details, "   ", d.columns()-1))
 		}
-		return d.write(text)
+		if err := d.write(text); err != nil {
+			return err
+		}
+		return d.fileChange(op)
 	}
 	// Preserve the plain/piped lifecycle format, including exact operation IDs.
 	desc = d.safe(strings.Join(strings.Fields(desc), " "))
 	desc = clipText(desc, 240)
-	return d.print("tool %s %s — %s (%.1fs)\n", op.ID, state, desc, time.Since(started).Seconds())
+	if err := d.print("tool %s %s — %s (%.1fs)\n", op.ID, state, desc, time.Since(started).Seconds()); err != nil {
+		return err
+	}
+	return d.fileChange(op)
 }
 
 // Short headings retain the first command line rather than flattening an entire
@@ -243,8 +273,23 @@ func (d *display) status() error {
 	if d.generating {
 		state = "model generating / input pending"
 	}
+	if d.contextStatus.ApprovalID != "" {
+		state = "awaiting compaction approval"
+	}
 	if err := d.print("Status: %s\n", state); err != nil {
 		return err
+	}
+	if err := d.printContextStatus(); err != nil {
+		return err
+	}
+	if s := d.transport; s != nil {
+		mode := "full"
+		if s.Incremental {
+			mode = "incremental"
+		}
+		if err := d.print("Last response transport: %s / %s; sent %d of %d input items, %d bytes. %s\n", s.Mode, mode, s.SentInputItems, s.TotalInputItems, s.RequestBytes, s.Fallback); err != nil {
+			return err
+		}
 	}
 	ids := make([]string, 0, len(d.operations))
 	for id, notice := range d.operations {
@@ -312,5 +357,97 @@ func (d *display) tick(frame int) error {
 		shortID = shortID[1 : len(shortID)-1]
 		rows = append(rows, fmt.Sprintf("%s %s %s %.0fs %s", frames[(frame+i)%4], shortID[:min(8, len(shortID))], n.state, time.Since(n.started).Seconds(), label))
 	}
+	if d.contextStatus.ApprovalID != "" {
+		rows = append([]string{"context approval: /compact for menu"}, rows...)
+	}
+	if d.contextStatus.Compacting {
+		if len(rows) > 0 && d.generating {
+			rows[0] = fmt.Sprintf("%s compacting context %.0fs (Ctrl-C or /stop)", frames[frame%4], time.Since(d.started).Seconds())
+		}
+	}
+	if err := d.updatePrompt(); err != nil {
+		return err
+	}
 	return d.ui.editor.SetStatus(rows)
+}
+
+func (d *display) updatePrompt() error {
+	if d.ui == nil || d.promptInfo == "" {
+		return nil
+	}
+	prefix := "ctx -- | "
+	if d.contextKnown {
+		prefix = fmt.Sprintf("ctx ~%dt | ", d.contextStatus.EstimatedTokens)
+	}
+	if d.contextStatus.ApprovalID != "" {
+		prefix = "ctx approval | "
+	}
+	return d.ui.editor.SetPromptInfo(prefix+d.promptInfo, d.color)
+}
+func (d *display) context(status contextbuilder.Status) error {
+	old, known := d.contextStatus, d.contextKnown
+	d.contextStatus, d.contextKnown = status, true
+	if status.ApprovalID != "" {
+		d.generating = false
+		if old.ApprovalID != status.ApprovalID {
+			choices := "/compact yes — approve ONE additional attempt; /compact no — decline and stop work."
+			if d.ui != nil {
+				choices = "Choose in the menu with Up/Down and Enter. No is selected by default; Esc defers. /compact reopens the menu."
+			}
+			if err := d.print("Context still too large. Compress another older chunk?\n%s\nNo further model request will be sent without approval; new messages are queued.\n", choices); err != nil {
+				return err
+			}
+		}
+	}
+	if status.Compacting && !old.Compacting {
+		if err := d.print("Compacting context — preserving recent messages and active tools; original history stays on disk.\n"); err != nil {
+			return err
+		}
+	}
+	if known && status.Compactions > old.Compactions {
+		if err := d.print("Context compacted: ~%d -> ~%d tokens. Original history retained.\n", old.EstimatedTokens, status.EstimatedTokens); err != nil {
+			return err
+		}
+	}
+	return d.tick(0)
+}
+func (d *display) printContextStatus() error {
+	s := d.contextStatus
+	if !d.contextKnown {
+		return d.print("Context: not measured yet; provider limit unknown.\n")
+	}
+	if err := d.print("Context: ~%d tokens (estimate); provider limit unknown; compactions %d.\n", s.EstimatedTokens, s.Compactions); err != nil {
+		return err
+	}
+	if s.ApprovalID != "" {
+		instructions := "/compact yes authorizes one more attempt; /compact no stops work."
+		if d.ui != nil {
+			instructions = "choose Yes/No in the menu; /compact reopens it (Esc defers)."
+		}
+		if err := d.print("Waiting for approval: %s\n", instructions); err != nil {
+			return err
+		}
+	}
+	if s.LastInputTokens > 0 {
+		return d.print("Last ordinary model input: %d tokens (%d cached, already included). Estimated size is informational, not a context limit.\n", s.LastInputTokens, s.CachedInputTokens)
+	}
+	return nil
+}
+
+func (d *display) fileChange(op operation.Operation) error {
+	if op.Type != operation.TypeFile || op.Status != operation.StatusCompleted {
+		return nil
+	}
+	state, err := operation.DecodeFileState(op)
+	if err != nil {
+		return err
+	}
+	if state.Result == nil || state.Result.Diff == "" {
+		return nil
+	}
+	diff := d.safe(state.Result.Diff)
+	if d.ui == nil {
+		return d.print("%s\n", diff)
+	}
+	return d.write((markdownView{safe: d.safe, color: d.color, width: d.columns()}).code([]byte(diff), "diff", ""))
 }

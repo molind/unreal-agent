@@ -47,6 +47,7 @@ but is not used by Codex. Ollama does not need a key.
 | `-model` | `UNREAL_HARNESS_LLM_MODEL` / `gpt-6-astra` |
 | `-reasoning-effort` | `UNREAL_HARNESS_LLM_REASONING_EFFORT` / `xhigh` |
 | `-base-url` | `UNREAL_HARNESS_LLM_BASE_URL` / adapter default |
+| `-transport auto\|websocket\|http` | `UNREAL_HARNESS_LLM_TRANSPORT`; default auto on first-party OpenAI/Codex, HTTP on custom endpoints |
 | `-max-attempts` | `UNREAL_HARNESS_LLM_MAX_ATTEMPTS` / **1** |
 | `-session ID` | Resume an existing session; missing IDs are errors |
 | `-session-directory DIR` | `<workspace>/.harness/sessions`; relative paths are workspace-relative |
@@ -82,7 +83,7 @@ accent never colors the draft. All decorations share the editor's viewport and
 cursor ownership, disappear before submission, and hide when space is needed
 for the draft. The chooser temporarily replaces the input area.
 
-Each finished operation leaves one compact notice: a green **✓** for success,
+Each finished operation leaves one compact notice (one space before and after the marker): a green **✓** for success,
 red **✗** for failure (including nonzero shell exits), or yellow **–** for
 cancellation. Commands stay neutral; duration and diagnostic metadata are muted.
 Long descriptions are clipped to the current width. Multiline scripts show their
@@ -174,6 +175,9 @@ are used when either input or output is not a capable terminal.
 | `/resume` | Open a recent-first cursor chooser; Enter confirms, Esc cancels |
 | `/resume ID` | Stop/join current work and load an existing conversation |
 | `/cancel ID` | Cancel just that operation; other work continues |
+| `/compact` | Reopen the pending compaction approval menu (plain mode: show instructions) |
+| `/compact yes` | Plain-mode fallback: approve exactly one additional compaction attempt |
+| `/compact no` | Plain-mode fallback: decline further compaction and stop/join work |
 | `/stop` | Stop model generation and all tools, retaining history and the chat |
 | Ctrl-C | Clear draft → stop active work → exit when idle |
 | `/exit`, `/quit`, or EOF | Stop/join work and close the application |
@@ -232,11 +236,200 @@ substitution, merging, or implicit startup resume.
 
 History and operation captures are canonical files under `.harness/sessions`.
 Resume displays saved user/assistant messages once and does not replay old tool
-notices. The model receives the full saved context, including tool results and
-provider reasoning state. Terminal output excludes reasoning and raw HTTP
+notices. The model receives the saved working context, including retained tool results and
+provider state; successful compaction checkpoints replace only older prefixes.
+The full original transcript remains on disk. Terminal output excludes reasoning and raw HTTP
 exchanges, preserves useful error causes, redacts configured environment credentials and common token patterns,
 and removes terminal control characters. **History/capture files are not
 redacted**; protect them like source code and other sensitive workspace data.
+
+## Structured file operations
+
+The model has **Read, Edit and Write** in addition to Bash and ViewImage. The chat
+instructs it to prefer these for file work; Bash remains for Git, builds, tests
+and other commands. This is a preference, not a shell prohibition or sandbox.
+
+- **Read**: `path`, optional 1-based `offset` (default 1) and `limit` (default 200,
+  maximum 2000). Returns numbered lines and a **16-character `revision`**. Output
+  is bounded; `truncated`/`next_offset` describe omitted text.
+- **Edit**: `path`, `revision`, exact `old_text`, `new_text`, optional
+  `replace_all` (default false). Empty new text deletes the match. Empty old text,
+  absent matches and ambiguous matches fail rather than guessing. Use sufficient
+  surrounding text for a unique match, or explicitly request every occurrence.
+- **Write**: `path`, `revision`, complete `content`. Use `revision: "missing"` for
+  **create-only**; overwrite requires a revision obtained by reading that file.
+  Parent directories must already exist. Prefer Edit for localized changes.
+
+The revision is an opaque short reference, **not a truncated integrity hash**.
+Private session metadata binds it to the canonical path and full SHA-256 digest.
+Mutations verify that full digest and return a new short revision. Old/unknown
+revisions and revisions for another file fail with guidance to Read again. A
+new session needs its own Read; resuming the same session retains bindings.
+
+Operations accept regular UTF-8 text files without NUL, up to 8 MiB. Supplied
+content/old/new text fields are each limited to 1 MiB. Leaf symlinks, directories,
+devices/FIFOs, hard-linked mutation targets and read-only mutation targets are
+refused. Parent symlinks are resolved; paths can still be outside the workspace.
+Mutations preserve ordinary permission bits and exact UTF-8/newline bytes.
+They stage a complete new file and atomically publish it; create-only publication
+cannot overwrite a racing creator. Cooperative writes use advisory locks plus
+revision/identity rechecks. **There is no filesystem-wide compare-and-swap against
+noncooperating editors:** an external program ignoring locks can still race the
+last check. Atomic replacement does not preserve ACLs/xattrs or inode identity.
+
+Edit/Write show a unified diff after a durably observed successful operation.
+On color-capable terminals, removed lines have a red background and added lines
+have a green background, with contrasting text. Context/file/hunk headers remain
+neutral. The same highlighting applies to `diff` and `patch` Markdown code blocks.
+Each changed row resets its style before the newline; no padding is added to the
+copied text. `NO_COLOR` and plain/piped output keep uncolored text. This changes
+presentation only, not captured diffs or model context.
+Long previews are bounded; the full patch is captured as
+`<session-directory>/operations/<session-ID>/<operation-ID>/change.diff`.
+File lifecycle logs describe the action/path and capture location, not contents.
+Receipts and revision bindings are private session files (directories 0700,
+metadata 0600). Canonical operation state/captures contain unredacted file data;
+protect them like source code. UI previews still use normal credential/control
+redaction. Old diffs are not replayed as new edits on `/resume`.
+
+A receipt is saved before mutation. Completed receipts return the recorded result
+without writing again. An interrupted prepared receipt can recognize matching
+post-change contents; otherwise it refuses to guess/reapply and asks for a fresh
+Read/new operation. Cancellation joins the worker, but **cannot roll back an
+already committed change**. A canceled mutation may need inspection. Do not remove
+receipts/revision bindings while a session is in use.
+
+## Incremental model transport
+
+For the first-party **openai-codex** and **openai** Responses endpoints, the default
+is **auto WebSocket** using the Responses `response.create` protocol. This mirrors
+the continuation mechanism in the public Codex client; it does not request durable
+server storage (`store` remains false). Custom/compatibility endpoints use HTTP by
+default, because supporting Responses HTTP does not imply supporting WebSockets.
+Use `-transport websocket` to require WebSockets, `-transport auto` to explicitly
+probe a custom endpoint, or `-transport http` to retain the original HTTP/SSE mode.
+Other provider adapters retain their existing HTTP transport.
+
+The local canonical conversation stays complete. On the wire:
+
+1. A new connection sends the full current working context.
+2. After a completed response, if settings/session match and the next input is
+   exactly the previous input plus its output plus new items, send only that new
+   suffix and `previous_response_id`. Tool results use the same incremental path.
+3. Changed instructions, model, tools, reasoning settings, rewritten prefixes,
+   compaction, session changes, cancellation or failed responses discard the
+   cached continuation. Reconnect/full synchronization restores the working
+   context, not the discarded pre-compaction transcript.
+
+A bounded background reader handles pings while local tools run. Close/cancel
+joins it; a stopped request never continues via hidden HTTP fallback. An idle
+closed connection is reset before new work. Explicit `previous_response_not_found`
+or connection-expiration errors **before generation** allow one full resync on a
+new connection. Ambiguous disconnects/partial generation are surfaced rather than
+blindly resubmitted; a later authorized request can reconnect from local history.
+Context-limit errors still reach the compaction/approval policy unchanged.
+
+Auto falls back to HTTP only for an explicitly unsupported upgrade (404/405/426/
+501), before sending generation. It does not downgrade on authentication, quota,
+policy, context or arbitrary network errors. The fallback is remembered for that
+client instance. WebSocket handshakes never follow credential-bearing redirects.
+No automatic OAuth refresh was added; renew credentials externally as before.
+
+`/status` reports the last observed transport, full/incremental mode, sent/total
+input item counts and request bytes. These counters are also in diagnostic logs;
+request bodies/authentication are not logged. Model settings/tool schemas still
+travel in each request. Sending a suffix reduces network payload, **not the model's
+logical context size or guaranteed billed tokens**; provider prompt caching and
+context limits still apply. New processes always reconstruct context locally and
+start with a full synchronization, not a potentially expired saved response ID.
+
+## Error-driven rolling context management
+
+There is **no assumed context-window limit, percentage, reserved capacity, or
+size-triggered compaction**. Even a large request is sent normally until the
+provider returns `context_length_exceeded`. The old `-context-window`,
+`-context-reserve` and `-auto-compact` options have been removed. No metadata lookup
+or fixed fallback limit is required for recovery.
+
+The prompt row shows **`ctx ~Nt`** (estimated token count, not fullness).
+`/status` shows the estimate, the last ordinary request's provider-reported input
+and cached tokens, and the number of completed compactions. Cached tokens are
+already included in input tokens. The estimate uses UTF-8 bytes, protocol/tool
+schema overhead and an image allowance, calibrated upward from reported usage.
+It is informational and helps choose a prefix, never blocks ordinary requests,
+and is not an exact tokenizer or billing count. The provider limit is explicitly
+shown as unknown; an unsaved chat shows `ctx --`.
+
+### Automatic first attempt, explicit approval after that
+
+1. Send the ordinary model request unchanged.
+2. On its first `context_length_exceeded`, summarize an older safe prefix once.
+3. Save the successful checkpoint and retry the ordinary request with the new
+   working context. **Already-executed commands are not rerun.**
+4. If that request still exceeds context, pause model requests and open a
+   **Yes/No chooser**, using the same editor menu as `/resume`. **No** is selected
+   by default. Up/Down selects; Enter confirms. Yes approves ONE further attempt;
+   No declines and stops/joins work while retaining history. **Esc defers** without
+   permission; `/compact` reopens the menu. Without a capable TTY, use the explicit
+   fallback commands `/compact yes` and `/compact no`.
+5. Every further overflow in the same episode requires a fresh approval. A
+   successful ordinary model response ends the episode; future growth can again
+   trigger one automatic attempt after a new provider overflow.
+
+Approval is an explicit local menu choice (or plain-mode command), not a model
+message. Menu keys and pasted text are never sent to the model. Outside the menu,
+ordinary text (including `yes`) is queued while awaiting permission and is **not
+consent**. The chooser preserves the draft and cursor; Escape restores them.
+If `/resume` is already open, the approval menu waits rather than replacing it.
+Scoped question IDs prevent delayed menu events from answering another question
+or accidentally selecting a session.
+Duplicate/stale approvals cannot authorize a later attempt. The gate is written
+to the session before it is displayed; restart and `/resume` cannot reset it.
+`/stop`, `/new`, session switching, Ctrl-C and EOF still perform normal cleanup.
+Decline/stop does not silently grant another automatic attempt on that history.
+There is no yes-by-timeout. Existing operations can finish while approval is
+pending; results are saved, but do not bypass the model-request gate.
+
+If the *summary request itself* exceeds context, ask for approval before trying a
+strictly smaller safe prefix. If no smaller prefix exists, explain the problem
+and stop work without dropping protected messages. Other summary failures stop
+work with a diagnostic rather than retrying endlessly. A context/summary failure
+keeps the chat open for `/new`, `/resume` or another explicit user request;
+concurrent storage, logging or output failures remain fatal.
+
+### What gets summarized
+
+```text
+1, 2, 3, 4, 5, 6, 7  ->  [summary of 1–4], 5, 6, 7
+```
+
+The planner selects roughly the oldest half by size, adjusted to safe boundaries.
+It retains at least the last **two ordinary model-response blocks**, all
+unanswered input, and entire active/cross-boundary tool call/result spans. This
+can keep substantially more than two blocks. The example is schematic, not a
+fixed count of four messages. A later approved compaction can include the prior
+summary and another older portion; summaries do not accumulate indefinitely.
+
+A separate tool-free request to the same model (low reasoning effort) creates a
+bounded factual handoff: goal, constraints, decisions, changes/paths, checks,
+unresolved issues and next steps. Historical images/private reasoning are
+omitted from that text extract. Summaries are lossy requests that consume tokens
+and add latency; this does not provide unlimited memory.
+
+Existing tools keep running during summarization. New user input is queued for
+the ensuing ordinary request, **not** used to cancel/restart the summarizer and
+spend another attempt. `/stop` still cancels maintenance immediately. Only a
+completed, nonempty, sufficiently smaller text summary is accepted. The prefix
+descriptor/hash and response are saved in append-only history **before** replacing
+the in-memory prefix. `/resume` reuses saved checkpoints without regenerating
+them. The current system/`AGENTS.md` instructions, complete original transcript,
+and capture files remain intact. Maintenance replies are not displayed as
+assistant answers, including during replay; progress and size changes are shown.
+
+A single oversized recent message or protected tool span may have no safe prefix
+to compress. In that case use `/new` with a concise handoff. Other harness hosts
+opt into recovery with `coordinator.Dependencies.RecoverContext`; a noninteractive
+host encountering a saved approval gate errors rather than waiting forever.
 
 ## Local logs and diagnostics
 
@@ -277,7 +470,7 @@ failures before log storage can be opened may only have stderr diagnostics.
   discussion is not authorization to edit; explicit implementation requests
   authorize relevant edits/tests. Workspace-root `AGENTS.md` is included.
   This is **not** an enforced read-only mode, sandbox, or approval system.
-- Bash (`/bin/sh`) and ViewImage are available. No remote tools, skill discovery,
+- Bash (`/bin/sh`), ViewImage, Read, Edit and Write are available. No remote tools, skill discovery,
   background jobs surviving exit, or multiple agents are added by this MVP.
 - Use only one process per session; there is no cross-process session lock.
   Forced termination/power loss cannot guarantee child cleanup or rollback.
@@ -298,12 +491,13 @@ failures before log storage can be opened may only have stderr diagnostics.
   **not** waits for an answer; scripted callers must keep stdin open until the
   desired answer, then send `/exit`. For a single prompt with wait-until-idle
   JSONL output, use `unreal-agent-runner` instead.
-- Provider failures stop work and exit with a sanitized diagnostic rather than
-  retrying indefinitely. Restart with `-session ID` after correcting settings.
+- Ordinary provider failures stop work and exit with a sanitized diagnostic rather than
+  retrying indefinitely. Context-limit and compaction failures instead keep the
+  chat open after stopping work (see rolling context management). Restart with `-session ID` after correcting settings.
   Token-shaped redaction is defense in depth, not a secret-detection guarantee.
-- No automatic compaction, unlimited context, streaming text, OAuth refresh,
-  forks, IDE integration, or permission modes. Start `/new` before context grows
-  beyond your chosen model limits.
+- No unlimited context, exact tokenizer, streaming text, OAuth refresh,
+  forks, IDE integration, or permission modes. Compaction retains a recent tail;
+  oversized protected history can still require `/new`.
 
 ## Verification
 
@@ -327,3 +521,23 @@ clearing without cancellation, model/tool stop, rapid clear/stop/exit sequences,
 idle/chooser exit, attachment/history preservation, pending input and settled
 coordinator idle notifications. Automated checks need neither real credentials
 nor a paid model; they do not demonstrate real-provider model availability.
+
+Context tests cover error-only triggering (large accepted requests do not compact),
+rolling prefix planning, in-flight tools, queued steering, stop/late replies,
+checkpoint persistence and restart, one-shot approvals and stale/duplicate
+permission rejection, durable approval gates, summary overflow with smaller
+prefixes, decline/stop, nonfatal failure recovery, and hidden maintenance replies.
+Real CLI/PTY tests verify default-No, explicit Yes, Escape/defer, reopening,
+stop, the approval gate and draft/cursor preservation. Scoped menu tests cover
+stale decisions and coexistence with the session chooser.
+Transport/paste tests check the complete 1 MiB input without an invented model limit.
+
+Structured-file tests cover short revision bindings, exact replacements, stale/
+ambiguous edits, create-only writes, special files, permission/newline preservation,
+concurrent writers, applicable diffs, cancellation and receipt recovery. A real
+CLI/PTY test runs Read -> Edit over a loopback WebSocket and checks that only new
+tool results are sent, the file changes, the diff is visible and /status shows
+incremental mode. WebSocket tests cover delta matching, session/model/context
+reset, Codex headers, ping handling, cancellation/join, bounded resync, partial
+failure, credential redirects and restricted HTTP fallback. These tests use fake
+local providers; they do not validate a live account/model's WebSocket availability.

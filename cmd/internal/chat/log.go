@@ -21,20 +21,21 @@ import (
 )
 
 type logRecord struct {
-	Time      time.Time    `json:"time"`
-	Stage     string       `json:"stage"`
-	Event     string       `json:"event"`
-	Session   session.ID   `json:"session,omitempty"`
-	Operation operation.ID `json:"operation,omitempty"`
-	Error     string       `json:"error,omitempty"`
-	Stack     string       `json:"stack,omitempty"`
-	Command   string       `json:"command,omitempty"`
-	Directory string       `json:"directory,omitempty"`
-	Started   time.Time    `json:"started,omitzero"`
-	Duration  float64      `json:"duration_seconds,omitempty"`
-	ExitCode  *int         `json:"exit_code,omitempty"`
-	Stdout    string       `json:"stdout,omitempty"`
-	Stderr    string       `json:"stderr,omitempty"`
+	Time      time.Time           `json:"time"`
+	Stage     string              `json:"stage"`
+	Event     string              `json:"event"`
+	Session   session.ID          `json:"session,omitempty"`
+	Operation operation.ID        `json:"operation,omitempty"`
+	Error     string              `json:"error,omitempty"`
+	Stack     string              `json:"stack,omitempty"`
+	Command   string              `json:"command,omitempty"`
+	Directory string              `json:"directory,omitempty"`
+	Started   time.Time           `json:"started,omitzero"`
+	Duration  float64             `json:"duration_seconds,omitempty"`
+	ExitCode  *int                `json:"exit_code,omitempty"`
+	Stdout    string              `json:"stdout,omitempty"`
+	Stderr    string              `json:"stderr,omitempty"`
+	Transport *llm.TransportUsage `json:"transport,omitempty"`
 }
 
 // App, coordinator and provider goroutines share this writer. No request,
@@ -98,6 +99,9 @@ func (l *logs) event(stage, event string, id session.ID, op operation.ID, err er
 	return l.write(l.file, r)
 }
 func (l *logs) command(id session.ID, op operation.Operation) error {
+	if l != nil && op.Type == operation.TypeFile {
+		return l.fileOperation(id, op)
+	}
 	if l == nil || op.Type != operation.TypeShell || op.Status == operation.StatusReady {
 		return nil
 	}
@@ -199,9 +203,14 @@ type loggedAdapter struct {
 	id   session.ID
 }
 
+// Mark local audit failures separately from recoverable provider/context errors.
+type diagnosticWriteError struct{ error }
+
+func (e *diagnosticWriteError) Unwrap() error { return e.error }
+
 func (a loggedAdapter) Respond(ctx context.Context, r llm.Request, o llm.RequestOptions) (response llm.Response, result error) {
 	if err := a.logs.event("provider", "request_started", a.id, "", nil); err != nil {
-		return response, err
+		return response, &diagnosticWriteError{err}
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -215,7 +224,77 @@ func (a loggedAdapter) Respond(ctx context.Context, r llm.Request, o llm.Request
 		if ctx.Err() != nil {
 			event = "request_canceled"
 		}
-		result = errors.Join(result, a.logs.event("provider", event, a.id, "", result))
+		if response.Transport != nil && result == nil && a.logs != nil {
+			a.logs.mu.Lock()
+			statsErr := a.logs.write(a.logs.file, logRecord{Stage: "provider", Event: "transport", Session: a.id, Transport: response.Transport})
+			a.logs.mu.Unlock()
+			if statsErr != nil {
+				result = errors.Join(result, &diagnosticWriteError{statsErr})
+			}
+		}
+		if err := a.logs.event("provider", event, a.id, "", result); err != nil {
+			result = errors.Join(result, &diagnosticWriteError{err})
+		}
 	}()
 	return a.Adapter.Respond(ctx, r, o)
+}
+
+// File lifecycle records contain paths/revisions/capture locations, never source
+// text or replacements. Full file data lives only in private canonical captures.
+func (l *logs) fileOperation(id session.ID, op operation.Operation) error {
+	if op.Status == operation.StatusReady {
+		return nil
+	}
+	state, err := operation.DecodeFileState(op)
+	if err != nil {
+		return err
+	}
+	key := string(id) + "/" + string(op.ID)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	path := filepath.Join(l.directory, "commands", string(id), url.PathEscape(string(op.ID))+".jsonl")
+	previous, known := l.commands[key]
+	if !known {
+		data, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line != "" {
+				if err := json.Unmarshal([]byte(line), &previous); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	status := operationState(op)
+	if previous.Event == status {
+		return nil
+	}
+	start := previous.Started
+	if start.IsZero() {
+		start = time.Now().UTC()
+	}
+	record := logRecord{Stage: "file", Event: status, Session: id, Operation: op.ID, Started: start, Command: state.Input.Action + ": " + state.Input.Path, Directory: filepath.Dir(state.Input.Path)}
+	if terminal(op.Status) {
+		record.Duration = time.Since(start).Seconds()
+	}
+	if state.Result != nil {
+		record.Stdout = state.Result.DiffPath
+		record.Error = state.Result.Error
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|unix.O_NOFOLLOW, 0600)
+	if err != nil {
+		return err
+	}
+	err = l.write(f, record)
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return err
+	}
+	l.commands[key] = record
+	return l.write(l.file, logRecord{Stage: "file", Event: status, Session: id, Operation: op.ID, Error: record.Error})
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore/localfile"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
+	"github.com/unreallabsai/unreal-agent/harness/tool/files"
 	"github.com/unreallabsai/unreal-agent/harness/tool/viewimage"
 )
 
@@ -321,13 +322,15 @@ func Run(
 		shell = "/bin/sh"
 	}
 	skills, skillErrors := tool.DiscoverSkills(filepath.Join(workspace, ".harness", "skills"))
-	names := []string{tool.BashName, tool.ViewImageName}
+	names := []string{tool.BashName, tool.ViewImageName, tool.ReadName, tool.EditName, tool.WriteName}
+	fileConfig := files.Config{Directory: workspace, BaseDirectory: operationDirectory}
 	if len(skills) != 0 {
 		names = append(names, tool.SkillUseName)
 	}
 	toolConfig := ToolConfig{
 		SessionID: sessionID, Getenv: getenv, Names: names,
 		Translators: tool.StaticTranslators{
+			Read: files.NewRead(fileConfig), Edit: files.NewEdit(fileConfig), Write: files.NewWrite(fileConfig),
 			Bash: bash.New(bash.Config{
 				Shell:         shell,
 				Directory:     workspace,

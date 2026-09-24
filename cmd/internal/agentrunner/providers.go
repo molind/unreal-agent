@@ -6,6 +6,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/llm/clients/openai"
 	"github.com/unreallabsai/unreal-agent/harness/llm/clients/openaicodex"
 	"github.com/unreallabsai/unreal-agent/harness/llm/clients/openrouter"
+	"github.com/unreallabsai/unreal-agent/harness/llm/responsesapi"
 )
 
 func DefaultProviders() []Provider {
@@ -22,8 +23,8 @@ func DefaultProviders() []Provider {
 			BaseURL:           "https://api.openai.com/v1",
 			DefaultModel:      "gpt-6-astra",
 			APIKeyEnvironment: "OPENAI_API_KEY",
-			NewClient: func(apiKey, baseURL string, maxAttempts int, _ func(string) string) (Client, error) {
-				return openai.NewClient(openai.Config{APIKey: apiKey, BaseURL: baseURL, MaxAttempts: &maxAttempts})
+			NewClient: func(apiKey, baseURL string, maxAttempts int, getenv func(string) string) (Client, error) {
+				return openai.NewClient(openai.Config{Transport: responsesapi.Transport(getenv("UNREAL_HARNESS_LLM_TRANSPORT")), APIKey: apiKey, BaseURL: baseURL, MaxAttempts: &maxAttempts})
 			},
 		},
 		{
@@ -35,6 +36,7 @@ func DefaultProviders() []Provider {
 					return nil, err
 				}
 				config.BaseURL, config.MaxAttempts = baseURL, &maxAttempts
+				config.Transport = responsesapi.Transport(getenv("UNREAL_HARNESS_LLM_TRANSPORT"))
 				return openaicodex.NewClient(config)
 			},
 		},

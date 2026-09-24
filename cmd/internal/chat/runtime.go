@@ -19,13 +19,15 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore/localfile"
 	"github.com/unreallabsai/unreal-agent/harness/tool"
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
+	"github.com/unreallabsai/unreal-agent/harness/tool/files"
 	"github.com/unreallabsai/unreal-agent/harness/tool/viewimage"
 )
 
 type event struct {
-	idle *bool
-	item *sessionstore.Item
-	op   *operation.Operation
+	context *contextbuilder.Status
+	idle    *bool
+	item    *sessionstore.Item
+	op      *operation.Operation
 }
 
 type runtime struct {
@@ -98,10 +100,12 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 		}
 	}
 	observer := store.AddObserver(func(_ session.ID, item sessionstore.Item) { emit(event{item: &item}) })
+	fileConfig := files.Config{Directory: c.workspace, BaseDirectory: directory}
 	registry := tool.NewRegistry(tool.StaticTranslators{
+		Read: files.NewRead(fileConfig), Edit: files.NewEdit(fileConfig), Write: files.NewWrite(fileConfig),
 		Bash:      bash.New(bash.Config{Shell: "/bin/sh", Directory: c.workspace, BaseDirectory: directory}),
 		ViewImage: viewimage.New(viewimage.Config{Directory: c.workspace}),
-	}, tool.BashName, tool.ViewImageName)
+	}, tool.BashName, tool.ViewImageName, tool.ReadName, tool.EditName, tool.WriteName)
 	builder := contextbuilder.NewBuilder()
 	builder.SetSystemPrompt(c.prompt)
 	builder.SetModel(llm.Model{ID: c.model, ReasoningEffort: llm.ReasoningEffort(c.effort)})
@@ -109,8 +113,10 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 		builder.AddTool(definition.Tool)
 	}
 	current := coordinator.New(coordinator.Dependencies{
-		OnIdleChange: func(idle bool) { emit(event{idle: &idle}) },
-		JoinModels:   true, SessionID: id, Inbox: inputs, Restored: restored,
+		OnIdleChange:    func(idle bool) { emit(event{idle: &idle}) },
+		RecoverContext:  true,
+		OnContextChange: func(status contextbuilder.Status) { emit(event{context: &status}) },
+		JoinModels:      true, SessionID: id, Inbox: inputs, Restored: restored,
 		Sessions: observedStore{Store: store, emit: emit, logs: log}, ContextBuilder: builder,
 		LLM: adapter, Tools: registry, Operations: r.operations,
 	})

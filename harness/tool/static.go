@@ -37,7 +37,7 @@ func StaticNames() []string {
 }
 
 func staticDefinitions() []Definition {
-	return []Definition{
+	return append([]Definition{
 		{Tool: llm.Tool{
 			Type:        llm.ToolFunction,
 			Name:        BashName,
@@ -84,7 +84,7 @@ func staticDefinitions() []Definition {
 				"required": []any{"name"},
 			},
 		}},
-	}
+	}, fileDefinitions()...)
 }
 
 func maxOutputLengthSchema() map[string]any {

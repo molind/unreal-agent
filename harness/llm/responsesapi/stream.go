@@ -148,6 +148,7 @@ func (state *responseState) observe(data []byte) error {
 	}
 	var event struct {
 		Type        string         `json:"type"`
+		Status      jsontext.Value `json:"status"`
 		Response    jsontext.Value `json:"response"`
 		Item        jsontext.Value `json:"item"`
 		OutputIndex *int           `json:"output_index"`
@@ -202,7 +203,12 @@ func (state *responseState) observe(data []byte) error {
 		if kind == "" {
 			kind = "error"
 		}
-		state.err = &APIError{StatusCode: http.StatusOK, Code: code, Message: message, Param: param, Type: kind}
+		status := http.StatusOK
+		var reported int
+		if len(event.Status) > 0 && json.Unmarshal(event.Status, &reported) == nil && reported >= 400 && reported <= 599 {
+			status = reported
+		}
+		state.err = &APIError{StatusCode: status, Code: code, Message: message, Param: param, Type: kind}
 	}
 	return nil
 }

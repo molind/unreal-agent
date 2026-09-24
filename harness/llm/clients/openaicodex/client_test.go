@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"github.com/coder/websocket"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -183,5 +184,39 @@ func TestClientConfigurationValidation(t *testing.T) {
 		if client, err := NewClient(config); err == nil || client != nil {
 			t.Fatal("invalid configuration accepted")
 		}
+	}
+}
+
+func TestCodexWebsocketUsesAccountAndNoServerStorage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer synthetic" || r.Header.Get("ChatGPT-Account-ID") != "account" || r.Header.Get("OpenAI-Beta") == "" || r.Header.Get("session-id") == "" {
+			t.Error("Codex websocket headers missing")
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		_, data, err := c.Read(r.Context())
+		if err != nil {
+			return
+		}
+		var body map[string]any
+		_ = json.Unmarshal(data, &body)
+		if body["type"] != "response.create" || body["store"] != false {
+			t.Error("wrong subscription websocket protocol")
+		}
+		_ = c.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"ok","status":"completed","output":[]}}`))
+		_, _, _ = c.Read(r.Context())
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{AccessToken: "synthetic", AccountID: "account", BaseURL: server.URL, Transport: responsesapi.TransportWebSocket})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	response, err := client.Respond(t.Context(), llm.Request{Model: llm.Model{ID: "test"}}, llm.RequestOptions{CacheKey: "session"})
+	if err != nil || response.Transport == nil || response.Transport.Mode != "websocket" {
+		t.Fatal("missing websocket response", err)
 	}
 }

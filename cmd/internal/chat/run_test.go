@@ -653,6 +653,7 @@ func TestSessionTopicsEmptyCurrentAndExactResume(t *testing.T) {
 }
 
 func TestPipedMessageSizeBoundary(t *testing.T) {
+	// The fake provider accepts this input; size alone must not trigger compaction.
 	c := launch(t, t.TempDir(), false)
 	text := strings.Repeat("x", maxMessageBytes-4) + "-END"
 	c.send(text)
@@ -702,7 +703,7 @@ func TestSlashPathsAreUserMessages(t *testing.T) {
 }
 
 func TestCommandRecognition(t *testing.T) {
-	for _, text := range []string{"/help", " /status\n", "/resume saved-id", "/cancel operation-id", "/stop invalid-argument"} {
+	for _, text := range []string{"/help", " /status\n", "/resume saved-id", "/cancel operation-id", "/compact", "/compact yes", "/compact no", "/stop invalid-argument"} {
 		if !isCommand(text) {
 			t.Errorf("command treated as text: %q", text)
 		}

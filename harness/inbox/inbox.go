@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"strings"
 
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
@@ -55,7 +56,17 @@ const (
 	StopWhenIdle   ControlMode = "when_idle"
 	Heartbeat      ControlMode = "heartbeat"
 	UpdateSettings ControlMode = "settings"
+	// ContextOverflow is an internal durable scheduling event, not model input.
+	ContextOverflow ControlMode = "context_overflow"
+	// ApproveCompaction grants exactly one maintenance attempt for RequestID.
+	ApproveCompaction ControlMode = "approve_compaction"
 )
+
+type ContextRecovery struct {
+	RequestID string
+	// Nonzero only if the rejected request was itself a compaction request.
+	FailedPrefixItems int `json:",omitzero"`
+}
 
 type Settings struct {
 	ReasoningEffort llm.ReasoningEffort `json:",omitzero"`
@@ -80,7 +91,7 @@ func (input Input) DecodeControlMessage() (ControlMessage, error) {
 		return ControlMessage{}, fmt.Errorf("decode control message: %w", err)
 	}
 	request := ControlMessage{Mode: envelope.Mode, Reason: envelope.Reason}
-	if request.Mode != UpdateSettings && len(envelope.Parameters) != 0 {
+	if request.Mode != UpdateSettings && request.Mode != ContextOverflow && request.Mode != ApproveCompaction && len(envelope.Parameters) != 0 {
 		return ControlMessage{}, fmt.Errorf("control mode %q does not accept parameters", request.Mode)
 	}
 	switch request.Mode {
@@ -89,6 +100,15 @@ func (input Input) DecodeControlMessage() (ControlMessage, error) {
 		if request.Reason == "" {
 			return ControlMessage{}, fmt.Errorf("heartbeat reason is empty")
 		}
+	case ContextOverflow, ApproveCompaction:
+		var recovery ContextRecovery
+		if err := json.Unmarshal(envelope.Parameters, &recovery, json.RejectUnknownMembers(true)); err != nil {
+			return ControlMessage{}, fmt.Errorf("decode context recovery parameters: %w", err)
+		}
+		if strings.TrimSpace(recovery.RequestID) == "" || len(recovery.RequestID) > 128 || recovery.FailedPrefixItems < 0 || (request.Mode == ApproveCompaction && recovery.FailedPrefixItems != 0) {
+			return ControlMessage{}, fmt.Errorf("invalid context recovery parameters")
+		}
+		request.Parameters = recovery
 	case UpdateSettings:
 		var settings Settings
 		if err := json.Unmarshal(envelope.Parameters, &settings, json.RejectUnknownMembers(true)); err != nil {

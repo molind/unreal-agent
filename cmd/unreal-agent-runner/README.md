@@ -57,3 +57,14 @@ docker run --rm -i --user "$(id -u):$(id -g)" \
 ```
 
 Each release also publishes its Git tag (for example, `v0.1.0`) for version pinning.
+
+### Structured files and transport
+
+The default local tools also include Read, Edit and Write. File mutations use
+short session-scoped revision references backed by full file digests, exact
+replacement checks and durable receipts; see the [chat documentation](../unreal_chat/README.md#structured-file-operations).
+They can be disabled by name in `disallowed_tools`.
+For first-party OpenAI/Codex the Responses adapter defaults to automatic
+incremental WebSockets. Set `UNREAL_HARNESS_LLM_TRANSPORT=http`, `websocket`, or
+`auto` to override for those providers. Custom endpoints default to HTTP.
+The response's optional Transport metadata reports actual full/delta payloads.

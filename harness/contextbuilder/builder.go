@@ -21,11 +21,17 @@ var preambleFile string
 var preamble = strings.TrimSpace(preambleFile)
 
 type builder struct {
-	request         llm.Request
-	preamble        string
-	systemPrompt    string
-	committedPrefix []llm.Item
-	stagedSuffix    []llm.Item
+	request           llm.Request
+	preamble          string
+	systemPrompt      string
+	committedPrefix   []llm.Item
+	stagedSuffix      []llm.Item
+	responseEnds      []int
+	openCalls         map[string]bool
+	tokenScale        float64
+	submittedEstimate int
+	lastUsage         llm.Usage
+	compactions       int
 }
 
 var _ Builder = (*builder)(nil)
@@ -35,7 +41,7 @@ func NewBuilder(skills ...tool.Skill) Builder {
 	if skillPrompt := formatSkillsForPrompt(skills); skillPrompt != "" {
 		currentPreamble += "\n\n" + skillPrompt
 	}
-	current := &builder{preamble: currentPreamble, committedPrefix: make([]llm.Item, 1)}
+	current := &builder{preamble: currentPreamble, committedPrefix: make([]llm.Item, 1), openCalls: make(map[string]bool)}
 	current.SetSystemPrompt("")
 	return current
 }
@@ -93,7 +99,19 @@ func (current *builder) SetSystemPrompt(prompt string) {
 }
 
 func (current *builder) AddModelResponse(response llm.Response) {
+	if response.Usage.InputTokens > 0 {
+		current.lastUsage = response.Usage
+		if current.submittedEstimate > 0 {
+			current.tokenScale = max(current.tokenScale, float64(response.Usage.InputTokens)/float64(current.submittedEstimate))
+		}
+	}
+	for _, item := range response.Output {
+		if call, ok := item.Data.(llm.ToolCall); ok {
+			current.openCalls[call.CallID] = true
+		}
+	}
 	current.committedPrefix = append(current.committedPrefix, response.Output...)
+	current.responseEnds = append(current.responseEnds, len(current.committedPrefix))
 }
 
 func (current *builder) AddReasoning(reasoning llm.Reasoning) {
@@ -112,6 +130,9 @@ func (current *builder) AddToolResult(
 	payload []llm.ToolResultOutput,
 	running bool,
 ) {
+	if !running {
+		delete(current.openCalls, callID)
+	}
 	runningOutput := []llm.ToolResultOutput{{Kind: llm.ToolResultText, Value: ToolCallRunningPayload}}
 	if running {
 		payload = runningOutput
@@ -132,6 +153,9 @@ func (current *builder) AddToolResult(
 func (current *builder) Commit() {
 	current.committedPrefix = append(current.committedPrefix, current.stagedSuffix...)
 	current.stagedSuffix = nil
+	request := current.request
+	request.Input = current.committedPrefix
+	current.submittedEstimate = EstimateTokens(request)
 }
 
 func (current *builder) Build() (Result, error) {

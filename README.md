@@ -42,7 +42,7 @@ The existing `unreal-agent-runner` remains the one-shot JSONL interface.
 | Session store | Persist canonical session history and operation state; support recovery and forks; atomically record tool-call status with operations. |
 | Context builder | Statefully assemble model input in memory. Return the model input together with a record of anything omitted, truncated, or compacted. Perform no I/O and accept no persistence dependencies. |
 | LLM Adapter | Send prepared model input to a provider and return a normalized completed response. Own authentication, cancellation, and provider errors. |
-| Tool registry | Own the fixed Bash, ViewImage, and skill-use definitions and their translators; expose the host-selected set. |
+| Tool registry | Own the fixed Bash, ViewImage, Read/Edit/Write, and skill-use definitions and their translators; expose the host-selected set. |
 | Tool translator | Validate a tool call and produce its status and operations. Format a recorded call status and prepared operation output into model results. Perform no I/O. |
 | Operation manager | Actor runtime for durable operations. The local implementation is swappable. |
 

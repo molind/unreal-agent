@@ -3,6 +3,7 @@ module github.com/unreallabsai/unreal-agent
 go 1.27.0
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/creack/pty v1.1.24
 	github.com/oapi-codegen/runtime v1.6.0
 	github.com/yuin/goldmark v1.8.6
