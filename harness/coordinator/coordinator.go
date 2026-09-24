@@ -15,6 +15,9 @@ import (
 )
 
 type Dependencies struct {
+	// JoinModels waits for canceled adapter calls before Run returns.
+	// Adapters must honor cancellation. Useful for runtime switching.
+	JoinModels            bool
 	ToolHeartbeatInterval time.Duration
 	SessionID             session.ID
 	Inbox                 *inbox.Inbox

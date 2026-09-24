@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 	"uuid"
 
@@ -32,6 +33,7 @@ type coordinator struct {
 	state        loopState
 	stop         stopState
 	cancelModel  context.CancelFunc
+	models       sync.WaitGroup
 }
 
 type stopState struct {
@@ -92,8 +94,13 @@ func (current *coordinator) Run(ctx context.Context) error {
 	}
 
 	modelContext, cancelModels := context.WithCancel(ctx)
-	defer cancelModels()
-	defer current.interruptModel()
+	defer func() {
+		cancelModels()
+		current.interruptModel()
+		if current.dependencies.JoinModels {
+			current.models.Wait()
+		}
+	}()
 	modelResponses := make(chan modelResponseResult)
 
 	inboxOutput := current.dependencies.Inbox.Output()
@@ -371,7 +378,9 @@ func (current *coordinator) requestModelResponse(
 	requestContext, cancel := context.WithCancel(ctx)
 	current.cancelModel = cancel
 	current.state.callModel = false
+	current.models.Add(1)
 	go func() {
+		defer current.models.Done()
 		response, err := current.dependencies.LLM.Respond(requestContext, built.Request, llm.RequestOptions{
 			CacheKey: string(current.dependencies.SessionID),
 		})
@@ -381,7 +390,7 @@ func (current *coordinator) requestModelResponse(
 			response: response,
 			err:      err,
 		}:
-		case <-ctx.Done():
+		case <-requestContext.Done():
 		}
 	}()
 	return nil
