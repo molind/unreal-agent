@@ -87,20 +87,28 @@ On a TTY with `TERM` set (not `dumb`), a locally extended `golang.org/x/term` li
   This editing history is not a separate persistent input log.
 - Ctrl-C: stop model/tools while keeping the chat and the draft being edited.
 - Ctrl-D: EOF on an empty draft; otherwise delete at the cursor.
-- Bracketed paste folds into one **▣ attachment cell** and announces its byte
-  and line counts. Enter sends the **exact text**, preserving newlines, tabs,
-  indentation, and trailing content, as one user message. Paste never submits
-  automatically. Blocks with **multiple content lines** (including ones beginning
-  `/exit`) are user content, not chat commands. **Single-line** `/commands`,
-  whether typed or pasted, run only after an explicit Enter outside the paste.
-  Copied commands/IDs may include surrounding blank whitespace or a trailing
-  newline: `/resume ` plus a copied ID, or `/cancel ` plus an operation ID,
-  works as before. Whitespace in user messages is never trimmed or flattened.
+- Short, single-line bracketed paste (up to **160 printable Unicode characters**)
+  inserts normal visible text: paths, IDs and short phrases can be edited one
+  character at a time, mixed with typing, and recalled from history.
+- Longer, multiline, or control-bearing paste folds into one **▣ attachment cell**
+  and announces its byte/line counts. Enter sends the **exact text**, preserving
+  newlines, tabs, indentation, and trailing content, as one user message. Paste
+  never submits automatically. Even a short copied line ending in a newline
+  remains a block so its original bytes are retained.
+- **Only the supported slash commands listed below are interpreted.** Absolute
+  paths such as `/Users/name/project/file.go` and `/tmp`, or any other unrecognized
+  slash-leading text, are user messages rather than unknown-command errors.
+  Known single-line commands run only after an explicit Enter outside paste
+  framing. Copied commands/IDs may include surrounding blank whitespace or a
+  trailing newline: `/resume ` plus a copied ID still works. Blocks with multiple
+  content lines, including ones beginning `/exit`, remain user text. User-message
+  whitespace is never trimmed or flattened.
 - Move across a folded block with the arrows; Backspace/Delete removes the
   whole block. You can edit typed text before/after it and mix multiple blocks.
   To change a block’s contents, delete it and paste the replacement. History
   recall and Ctrl-C retain the complete blocks, not just their visible markers.
-  Paste contents are not echoed or interpreted as terminal escape sequences.
+  Folded contents are not echoed; short printable pastes are visible like typing.
+  Neither kind is fed to the terminal key parser or executed as escape sequences.
 - A complete message (typed text plus all blocks) supports **up to 1 MiB of
   UTF-8 text**. The visible editor supports 4096 cells; each folded block uses
   only one. Exceeding either limit explicitly rejects the **whole draft**;
@@ -235,7 +243,8 @@ failures before log storage can be opened may only have stderr diagnostics.
   single-cell Unicode such as Belarusian; complex combining/emoji/wide-glyph
   cursor widths and terminal-specific reflow are limited by `x/term`.
   Messages/piped lines are limited to 1 MiB; the editable view to 4096 cells,
-  with explicit rejection rather than truncation. Folded paste supports long
+  with explicit rejection rather than truncation. Small pasted text counts
+  toward the same editor limit as typing. Folded paste supports long
   code blocks without spanning the screen. Very long typed drafts/activity
   prompts spanning the whole screen are best avoided.
   History navigation belongs to the current process, not the selected session.

@@ -109,8 +109,8 @@ func (u *terminalUI) Write(p []byte) (int, error) {
 }
 
 // Read recognizes only bracketed-paste framing and Ctrl-C, leaving editing to
-// x/term. A paste is never fed to its key parser: arbitrary contents (including
-// tabs, newlines and terminal escapes) become an immutable attachment instead.
+// x/term. A paste is never fed to its key parser: short printable text is inserted
+// by a callback; long/multiline/control-bearing text becomes an attachment.
 func (u *terminalUI) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil

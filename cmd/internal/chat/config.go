@@ -27,12 +27,13 @@ const help = `Enter a complete line to send a message (also while work is runnin
 Terminal: arrows/Ctrl-B/F move; Home/End or Ctrl-A/E; Backspace/Delete;
 Ctrl-U/K clear before/after cursor; Ctrl-W deletes a word; Up/Down or Ctrl-P/N
 recall this run’s input history. Ctrl-D on an empty draft exits.
-Ctrl-C stops work, not the chat, retaining your draft. Paste folds into a ▣
-block (exact text, including newlines/tabs); Enter submits, never paste itself.
-Multiple content lines are user text, even when starting with a slash.
-Single-line /commands (typed or pasted, with optional surrounding blank lines)
-run only after Enter; copied IDs work.
-Arrows cross a block; Backspace/Delete removes it whole.
+Ctrl-C stops work, not the chat, retaining your draft. Short printable paste
+(up to 160 characters, one line) inserts editable text. Longer/multiline paste
+folds into a ▣ block (exact bytes, including newlines/tabs). Only Enter submits.
+Only the listed single-line /commands are interpreted (typed or pasted, with
+optional surrounding blank lines); other slash-leading text, including absolute
+paths, is a user message. Multiple content lines are always user text.
+Arrows cross a folded block; Backspace/Delete removes it whole.
 History retains the blocks. Limit: 1 MiB per message, 4096 editable cells;
 exceeding either rejects the whole draft explicitly, never sends a prefix.
 Async output preserves the draft/cursor.

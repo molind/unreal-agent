@@ -388,18 +388,35 @@ func (a *application) replay() error {
 		after = page.NextAfter
 	}
 }
+
+// A slash is also the first character of an absolute path. Only our explicit
+// command vocabulary is interpreted; other slash-leading input is user text.
+func isCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	if strings.ContainsAny(text, "\r\n") {
+		return false
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "/help", "/status", "/sessions", "/new", "/resume", "/cancel", "/stop", "/exit", "/quit":
+		return true
+	}
+	return false
+}
+
 func (a *application) command(text string) (bool, error) {
+	if !isCommand(text) {
+		return false, a.display.print("Unknown command %q. Type /help.\n", text)
+	}
 	fields := strings.Fields(text)
 	name := fields[0]
 	want := 1
 	switch name {
 	case "/cancel":
 		want = 2
-	}
-	switch name {
-	case "/help", "/status", "/sessions", "/new", "/resume", "/cancel", "/stop", "/exit", "/quit":
-	default:
-		return false, a.display.print("Unknown command %q. Type /help.\n", name)
 	}
 	if name == "/resume" && len(fields) == 2 {
 		want = 2
@@ -497,7 +514,7 @@ func (a *application) accept(l line) (bool, error) {
 	if text == "" && !l.literal {
 		return false, nil
 	}
-	if !l.literal && strings.HasPrefix(text, "/") {
+	if !l.literal && isCommand(text) {
 		return a.command(text)
 	}
 	input := newInput(inbox.InputExternal, l.text)

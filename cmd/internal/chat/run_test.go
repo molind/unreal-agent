@@ -239,7 +239,7 @@ func TestSequentialSteeringResumeAndCommands(t *testing.T) {
 	assertMessages(t, third.request, llm.RoleUser, "first", "second", "steer")
 	third.reply <- reply("three")
 	c.wait("assistant> three")
-	for _, command := range []string{"/help", "/status", "/sessions", "/wat", "/cancel", "/new bad", "/cancel missing", "/resume missing"} {
+	for _, command := range []string{"/help", "/status", "/sessions", "/cancel", "/new bad", "/cancel missing", "/resume missing"} {
 		c.send(command)
 	}
 	c.wait("Current session retained")
@@ -675,5 +675,41 @@ func TestPipedMessageSizeBoundary(t *testing.T) {
 	case <-c.client.calls:
 		t.Fatal("partial piped line reached model")
 	default:
+	}
+}
+
+func TestSlashPathsAreUserMessages(t *testing.T) {
+	c := launch(t, t.TempDir(), false)
+	for i, text := range []string{"/Users/evgen/my project/main.go", "/tmp", "/not-a-command аргумент", "/"} {
+		c.send(text)
+		call := c.call()
+		got := messages(call.request, llm.RoleUser)
+		if len(got) != i+1 || got[i] != text {
+			t.Fatalf("slash-leading user input changed: %q", got)
+		}
+		answer := fmt.Sprintf("path received %d", i)
+		call.reply <- reply(answer)
+		c.wait(answer)
+	}
+	c.send("/status")
+	c.wait("Status: idle")
+	select {
+	case <-c.client.calls:
+		t.Fatal("known command was sent to the model")
+	default:
+	}
+	c.finish("/exit")
+}
+
+func TestCommandRecognition(t *testing.T) {
+	for _, text := range []string{"/help", " /status\n", "/resume saved-id", "/cancel operation-id", "/stop invalid-argument"} {
+		if !isCommand(text) {
+			t.Errorf("command treated as text: %q", text)
+		}
+	}
+	for _, text := range []string{"", "/tmp", "/Users/name/project", "read /stop", "/exit\nrm file", "/resume\nsaved-id", "/unknown"} {
+		if isCommand(text) {
+			t.Errorf("user text treated as command: %q", text)
+		}
 	}
 }

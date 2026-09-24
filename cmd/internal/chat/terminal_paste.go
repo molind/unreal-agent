@@ -5,13 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/unreallabsai/unreal-agent/internal/lineeditor"
 )
 
 const (
-	maxMessageBytes = 1024 * 1024
+	maxMessageBytes     = 1024 * 1024
+	maxInlinePasteRunes = 160
 	// x/term checks this AFTER AutoCompleteCallback. Guard it there so its
 	// silent insertion cap can never turn a long draft into a partial message.
 	maxEditorRunes  = 4096
@@ -24,6 +26,7 @@ func attachmentRune(r rune) bool { return r >= attachmentFirst && r <= attachmen
 // Use the library history and editing state, but remember lines only AFTER
 // validation. Recalled lines contain the same atomic attachment cells, not
 // expanded multiline text that would be unsafe to echo or too large to edit.
+// Short printable pastes use normal editor text and the same validated history.
 type validatedHistory struct{ lineeditor.History }
 
 func (validatedHistory) Add(string) {}
@@ -57,13 +60,26 @@ func (u *terminalUI) editKey(text string, pos int, key rune) (string, int, bool)
 			u.reject("paste is not valid UTF-8")
 			return "", 0, true
 		}
-		if utf8.RuneCountInString(text) >= maxEditorRunes {
+		if payload == "" {
+			return text, pos, true
+		}
+		inline := inlinePaste(payload)
+		cells := 1
+		if inline {
+			cells = utf8.RuneCountInString(payload)
+		}
+		if utf8.RuneCountInString(text)+cells > maxEditorRunes {
 			u.reject("editable draft exceeds 4096 cells; use a folded paste for long text")
 			return "", 0, true
 		}
 		if u.expandedSize(text)+len(payload) > maxMessageBytes {
 			u.reject("message exceeds 1 MiB")
 			return "", 0, true
+		}
+		if inline {
+			// Insert as data in one callback, never through the key parser.
+			// The editor owns character editing and history for short pastes.
+			return text[:pos] + payload + text[pos:], pos + len(payload), true
 		}
 		// Reuse only unreferenced slots; live draft/history references are retained.
 		for attempts := 0; attempts <= attachmentLast-attachmentFirst; attempts++ {
@@ -76,7 +92,7 @@ func (u *terminalUI) editKey(text string, pos int, key rune) (string, int, bool)
 				continue
 			}
 			u.attachments[marker] = payload
-			_, _ = fmt.Fprintf(u.editor, "Paste attached as ▣: %d bytes, %d lines; Exact text retained; single-line /commands run only after Enter. Arrows move across it; Backspace/Delete removes the whole block.\n", len(payload), strings.Count(payload, "\n")+1)
+			_, _ = fmt.Fprintf(u.editor, "Paste attached as ▣: %d bytes, %d lines. Exact text retained; Backspace/Delete removes the block.\n", len(payload), strings.Count(payload, "\n")+1)
 			return text[:pos] + string(marker) + text[pos:], pos + utf8.RuneLen(marker), true
 		}
 		u.reject("too many retained paste attachments")
@@ -104,6 +120,21 @@ func (u *terminalUI) editKey(text string, pos int, key rune) (string, int, bool)
 	}
 	return "", 0, false
 }
+
+// Long/multiline or control-bearing payloads stay folded and byte-exact.
+// Short printable text is safe to display and edit like ordinary typed text.
+func inlinePaste(payload string) bool {
+	if utf8.RuneCountInString(payload) > maxInlinePasteRunes {
+		return false
+	}
+	for _, r := range payload {
+		if !unicode.IsPrint(r) || attachmentRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
 func (u *terminalUI) expandedSize(text string) int {
 	size := len(text)
 	for _, r := range text {
@@ -147,7 +178,7 @@ func (u *terminalUI) readLine() (line, error) {
 		// A copied command/ID may include a trailing newline or blank padding;
 		// only multiple content lines force literal user-message semantics.
 		commandLine := strings.TrimSpace(result.text)
-		if result.literal && !strings.ContainsAny(commandLine, "\r\n") && strings.HasPrefix(commandLine, "/") {
+		if result.literal && isCommand(commandLine) {
 			result.literal = false
 		}
 

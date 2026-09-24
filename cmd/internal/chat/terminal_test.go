@@ -45,21 +45,22 @@ func TestTerminalFaithfulPasteAndEditing(t *testing.T) {
 	for _, test := range []struct {
 		name, keys string
 		want       []line
+		folded     bool
 	}{
-		{"indentation", bracketed(code) + "\r", []line{{text: code, literal: true}}},
-		{"long", bracketed(long) + "\r", []line{{text: long, literal: true}}},
-		{"slash", bracketed("/exit\n\t/not a command\n") + "\r", []line{{text: "/exit\n\t/not a command\n", literal: true}}},
-		{"mixed and recalled", "before!\x1b[D" + bracketed(code) + "after\r\x1b[A\x01[\x05]\r", []line{{text: "before" + code + "after!", literal: true}, {text: "[before" + code + "after!]", literal: true}}},
-		{"multiple", "A" + bracketed(code) + "B" + bracketed(long) + "C\r", []line{{text: "A" + code + "B" + long + "C", literal: true}}},
-		{"atomic backspace", "before" + bracketed(long) + "\x7fafter\r", []line{{text: "beforeafter"}}},
-		{"atomic delete", "before" + bracketed(long) + "\x1b[D\x1b[3~after\r", []line{{text: "beforeafter"}}},
-		{"whitespace", bracketed("\t \n\n") + "\r", []line{{text: "\t \n\n", literal: true}}},
-		{"typed command, pasted argument", "/resume " + bracketed("saved-id") + "\r", []line{{text: "/resume saved-id"}}},
-		{"pasted verb", "/" + bracketed("exit") + "\r", []line{{text: "/exit"}}},
-		{"typed verb, multiline argument", "/resume " + bracketed("id\n/stop") + "\r", []line{{text: "/resume id\n/stop", literal: true}}},
-		{"pasted command with trailing newline", bracketed(" /status\n\n") + "\r", []line{{text: " /status\n\n"}}},
-		{"typed command with copied line", "/resume " + bracketed("saved-id\r\n") + "\r", []line{{text: "/resume saved-id\r\n"}}},
-		{"private literal", bracketed("\ue000\uf8ff") + "\r", []line{{text: "\ue000\uf8ff", literal: true}}},
+		{"indentation", bracketed(code) + "\r", []line{{text: code, literal: true}}, true},
+		{"long", bracketed(long) + "\r", []line{{text: long, literal: true}}, true},
+		{"slash", bracketed("/exit\n\t/not a command\n") + "\r", []line{{text: "/exit\n\t/not a command\n", literal: true}}, true},
+		{"mixed and recalled", "before!\x1b[D" + bracketed(code) + "after\r\x1b[A\x01[\x05]\r", []line{{text: "before" + code + "after!", literal: true}, {text: "[before" + code + "after!]", literal: true}}, true},
+		{"multiple", "A" + bracketed(code) + "B" + bracketed(long) + "C\r", []line{{text: "A" + code + "B" + long + "C", literal: true}}, true},
+		{"atomic backspace", "before" + bracketed(long) + "\x7fafter\r", []line{{text: "beforeafter"}}, true},
+		{"atomic delete", "before" + bracketed(long) + "\x1b[D\x1b[3~after\r", []line{{text: "beforeafter"}}, true},
+		{"whitespace", bracketed("\t \n\n") + "\r", []line{{text: "\t \n\n", literal: true}}, true},
+		{"typed command, pasted argument", "/resume " + bracketed("saved-id") + "\r", []line{{text: "/resume saved-id"}}, false},
+		{"pasted verb", "/" + bracketed("exit") + "\r", []line{{text: "/exit"}}, false},
+		{"typed verb, multiline argument", "/resume " + bracketed("id\n/stop") + "\r", []line{{text: "/resume id\n/stop", literal: true}}, true},
+		{"pasted command with trailing newline", bracketed(" /status\n\n") + "\r", []line{{text: " /status\n\n"}}, true},
+		{"typed command with copied line", "/resume " + bracketed("saved-id\r\n") + "\r", []line{{text: "/resume saved-id\r\n"}}, true},
+		{"private literal", bracketed("\ue000\uf8ff") + "\r", []line{{text: "\ue000\uf8ff", literal: true}}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, out, _ := editTerminal(t, test.keys)
@@ -76,8 +77,8 @@ func TestTerminalFaithfulPasteAndEditing(t *testing.T) {
 					t.Fatal("private marker leaked instead of visible attachment cell")
 				}
 			}
-			if !strings.Contains(out, "Paste attached as ▣:") {
-				t.Fatal("folded content not announced")
+			if strings.Contains(out, "Paste attached as ▣:") != test.folded {
+				t.Fatal("incorrect inline/folded paste presentation")
 			}
 		})
 	}
@@ -87,6 +88,8 @@ func TestTerminalLimitsRejectWholeDraft(t *testing.T) {
 		{"paste bytes", bracketed(strings.Repeat("x", maxMessageBytes+1)), "exceeds 1 MiB"},
 		{"aggregate", bracketed(strings.Repeat("x", maxMessageBytes)) + "z", "exceeds 1 MiB"},
 		{"typed cells", strings.Repeat("б", maxEditorRunes+1), "exceeds 4096 cells"},
+		{"inline paste cells", strings.Repeat("б", maxEditorRunes-1) + bracketed("xy"), "exceeds 4096 cells"},
+		{"inline paste bytes", bracketed(strings.Repeat("x", maxMessageBytes)) + bracketed("small"), "exceeds 1 MiB"},
 		{"invalid UTF8", bracketed("start\xfftail"), "not valid UTF-8"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -142,5 +145,59 @@ func TestTerminalRejectedTypingHasBoundedEcho(t *testing.T) {
 	}
 	if len(out) > 100_000 {
 		t.Fatalf("rejection re-echoed the whole draft per dropped key: %d bytes", len(out))
+	}
+}
+
+func TestTerminalShortPasteIsEditableAndNeverSubmits(t *testing.T) {
+	for _, test := range []struct{ name, keys, want string }{
+		{"path", bracketed("/Users/evgen/my project/file.go") + "\x7fX\r", "/Users/evgen/my project/file.gX"},
+		{"delete in middle", bracketed("abcd") + "\x1b[D\x1b[D\x1b[3~X\r", "abXd"},
+		{"Cyrillic", bracketed("прывітанне") + "\x7fі\r", "прывітанні"},
+		{"mixed", "before" + bracketed(" /tmp/path ") + "after\r", "before /tmp/path after"},
+		{"command", bracketed("/status") + "\r", "/status"},
+		{"empty", "keep" + bracketed("") + "\r", "keep"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, out, _ := editTerminal(t, test.keys)
+			if len(got) != 1 || got[0].text != test.want || got[0].literal {
+				t.Fatalf("short paste was not normal editable text: %#v", got)
+			}
+			if strings.Contains(out, "Paste attached") {
+				t.Fatal("short paste was folded")
+			}
+		})
+	}
+	got, _, _ := editTerminal(t, bracketed("/tmp/path"))
+	if len(got) != 0 {
+		t.Fatal("paste submitted without Enter")
+	}
+	got, _, _ = editTerminal(t, bracketed("/tmp/path")+"\r\x1b[A\x7fX\r")
+	if len(got) != 2 || got[1].text != "/tmp/patX" {
+		t.Fatal("short paste history lost character editing")
+	}
+}
+
+func TestTerminalPasteThresholdAndSafeFolding(t *testing.T) {
+	for _, test := range []struct {
+		text string
+		fold bool
+	}{
+		{strings.Repeat("б", maxInlinePasteRunes), false},
+		{strings.Repeat("б", maxInlinePasteRunes+1), true},
+		{"/Users/name/path\n", true},
+		{"/tmp/" + strings.Repeat("x", maxInlinePasteRunes), true},
+		{"one\ttwo", true},
+		{"one\ntwo", true},
+		{"text\x1b[2J", true},
+		{"text\u202e", true},
+		{"\ue000", true},
+	} {
+		got, out, _ := editTerminal(t, bracketed(test.text)+"\r")
+		if len(got) != 1 || got[0].text != test.text || got[0].literal != test.fold {
+			t.Fatalf("paste changed: %#v, want %q folded=%v", got, test.text, test.fold)
+		}
+		if strings.Contains(out, "Paste attached") != test.fold || strings.Contains(out, "\x1b[2J") || strings.ContainsRune(out, '\u202e') {
+			t.Fatal("wrong/unsafe paste display")
+		}
 	}
 }

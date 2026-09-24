@@ -462,6 +462,16 @@ func TestTTYFaithfulPastesAndLimits(t *testing.T) {
 			t.Fatal("private attachment marker leaked")
 		}
 	}
+	paste("/Users/evgen/my project/file.go")
+	noRequest()
+	cli.send("\x7fX\r")
+	request("/Users/evgen/my project/file.gX")
+	for _, path := range []string{"/tmp", "/Users/name/path\n", "/tmp/" + strings.Repeat("long-path", 30)} {
+		paste(path)
+		noRequest()
+		cli.send("\r")
+		request(path)
+	}
 	code := "\tif ready {\n\t\tprintln(\"прывітанне\")\n\t}\n  tail  \n"
 	long := "LONG-PASTE-" + strings.Repeat("б", 6000) + "-END"
 	for _, text := range []string{code, long, "/exit\n\t/not a command\n"} {
