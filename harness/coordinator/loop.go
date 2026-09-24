@@ -42,6 +42,7 @@ type stopState struct {
 }
 
 type loopState struct {
+	discardPending    bool // Replayed stop barrier; cleared by external input.
 	currentTurnID     session.TurnID
 	currentTurnType   session.TurnType
 	toolCalls         map[toolCallKey]toolCallState
@@ -55,6 +56,7 @@ type loopState struct {
 }
 
 type toolCallState struct {
+	discarded  bool // This call preceded a durable stop, even if later input reopens delivery.
 	toolCall   llm.ToolCall
 	status     *tool.CallStatus
 	operations map[operation.ID]struct{}
@@ -115,7 +117,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 	if err := current.dispatchOperationsToManager(); err != nil {
 		return err
 	}
-	if toolCallStatusesRequireModelResponse(statuses) || current.pendingInputs() > 0 {
+	if !current.state.discardPending && (toolCallStatusesRequireModelResponse(statuses) || current.pendingInputs() > 0) {
 		err = current.requestModelResponse(modelContext, modelResponses)
 		if err != nil {
 			return err
@@ -170,7 +172,7 @@ func (current *coordinator) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if current.stop.request.Mode == inbox.StopHard {
+		if current.stopping() {
 			stopped, err := current.handleStop()
 			if err != nil {
 				return err
@@ -213,7 +215,7 @@ func (current *coordinator) processEvents(ctx context.Context) (bool, error) {
 	if _, err := current.reconcileToolCalls(ctx); err != nil {
 		return false, err
 	}
-	return current.state.callModel || (current.pendingInputs() > 0 && current.cancelModel == nil && len(current.state.graceToolCalls) == 0), nil
+	return !current.state.discardPending && (current.state.callModel || (current.pendingInputs() > 0 && current.cancelModel == nil && len(current.state.graceToolCalls) == 0)), nil
 }
 
 func (current *coordinator) processInputs(ctx context.Context, inputs []inbox.Input) error {
@@ -265,6 +267,10 @@ func (current *coordinator) clearToolGrace() {
 	current.state.grace = nil
 }
 
+func (current *coordinator) stopping() bool {
+	return current.stop.request.Mode == inbox.StopHard || current.stop.request.Mode == inbox.StopAndDiscard
+}
+
 func (current *coordinator) handleStop() (bool, error) {
 	if !current.stop.cancellationRequested {
 		current.interruptModel()
@@ -282,7 +288,7 @@ func (current *coordinator) isIdle() bool {
 }
 
 func (current *coordinator) isWaitingForOnlyToolCalls() bool {
-	return current.cancelModel == nil && current.stop.request.Mode != inbox.StopHard &&
+	return current.cancelModel == nil && !current.stopping() &&
 		current.pendingInputs() == 0 && len(current.state.toolCalls) != 0
 }
 
@@ -318,7 +324,7 @@ func (current *coordinator) interruptModel() {
 }
 
 func (current *coordinator) acceptStop(request inbox.ControlMessage) {
-	if current.stop.request.Mode == inbox.StopHard {
+	if current.stopping() {
 		return
 	}
 	current.stop.request = request
@@ -415,7 +421,7 @@ func (current *coordinator) handleInboxInput(ctx context.Context, input inbox.In
 		switch request.Mode {
 		case inbox.UpdateSettings:
 			return nil
-		case inbox.StopHard, inbox.StopWhenIdle:
+		case inbox.StopHard, inbox.StopWhenIdle, inbox.StopAndDiscard:
 			current.acceptStop(request)
 		}
 	}
@@ -498,6 +504,25 @@ func (current *coordinator) restore(ctx context.Context) error {
 	}
 	for _, value := range current.dependencies.Restored.Operations {
 		current.addOperationToLocalState(value)
+	}
+	// Apply the stop to its calls, not the final input-delivery gate: newer
+	// input may have reopened delivery before cancellation was checkpointed.
+	// Load the latest operation snapshots first to preserve terminal outcomes.
+	for _, call := range current.state.toolCalls {
+		if !call.discarded {
+			continue
+		}
+		for id := range call.operations {
+			value, exists := current.state.operations[id]
+			if !exists || operationIsTerminal(value.Status) {
+				continue
+			}
+			value.Status = operation.StatusCanceled
+			if err := current.storeOperationInSessionStore(ctx, value); err != nil {
+				return err
+			}
+			current.addOperationToLocalState(value)
+		}
 	}
 	return nil
 }
@@ -583,15 +608,30 @@ func (current *coordinator) addItemToLocalState(
 				)
 			}
 			current.state.availableInputs++
+			current.state.discardPending = false
 		}
 		if input.Kind == inbox.InputControl {
 			request, err := input.DecodeControlMessage()
 			if err != nil {
 				return sessionstore.Item{}, err
 			}
+			if request.Mode == inbox.Heartbeat && current.state.discardPending {
+				// Keep the input in the log, but do not create undeliverable work
+				// or a new model instruction while waiting for external input.
+				return item, nil
+			}
 			current.dependencies.ContextBuilder.AddControlMessage(request)
 			if request.Mode == inbox.Heartbeat {
 				current.state.availableInputs++
+			}
+			if request.Mode == inbox.StopAndDiscard {
+				for key, call := range current.state.toolCalls {
+					call.discarded = true
+					current.state.toolCalls[key] = call
+				}
+				current.state.discardPending = true
+				current.state.deliveredInputs = current.state.availableInputs
+				current.state.callModel = false
 			}
 		}
 
@@ -691,12 +731,17 @@ func (current *coordinator) finishToolCall(
 	callID string,
 ) {
 	key := toolCallKey{turnID: turnID, callID: callID}
+	call := current.state.toolCalls[key]
 	delete(current.state.toolCalls, key)
 	delete(current.state.graceToolCalls, key)
 	if len(current.state.graceToolCalls) == 0 {
 		current.clearToolGrace()
 	}
-	current.state.availableInputs++
+	// The result remains in context, but a discarded call cannot create new
+	// delivery or consume user input accepted while cancellation was pending.
+	if !call.discarded {
+		current.state.availableInputs++
+	}
 }
 
 func (current *coordinator) toolCallOperationsAreTerminal(
@@ -794,7 +839,9 @@ func (current *coordinator) scheduleToolCall(
 	translator, exists := current.dependencies.Tools.Resolve(call.Name)
 	toolContext := &toolCallContext{}
 	var status tool.CallStatus
-	if exists {
+	if current.state.toolCalls[key].discarded {
+		status = tool.ErrorStatus("Tool call canceled by user stop", 0)
+	} else if exists {
 		status = translator.Translate(toolContext, call)
 	} else {
 		status = tool.ErrorStatus(fmt.Sprintf("tool %q is not available", call.Name), 0)

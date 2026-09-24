@@ -74,6 +74,13 @@ func (current *builder) AddControlMessage(request inbox.ControlMessage) {
 			Type: llm.ItemMessage,
 			Data: llm.Message{Role: llm.RoleUser, Text: request.Reason},
 		})
+	case inbox.StopAndDiscard:
+		// Preserve the interruption in model context as well as scheduling state,
+		// so a later message does not revive an unanswered, canceled request.
+		current.stagedSuffix = append(current.stagedSuffix, llm.Item{
+			Type: llm.ItemMessage,
+			Data: llm.Message{Role: llm.RoleSystem, Text: "The preceding work was stopped. Do not resume unfinished requests or retry interrupted tools unless a later user message explicitly asks you to."},
+		})
 	}
 }
 

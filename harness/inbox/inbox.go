@@ -48,6 +48,9 @@ func (input Input) Validate() error {
 type ControlMode string
 
 const (
+	// StopAndDiscard cancels work and durably retires pending delivery.
+	// Conversation history is retained; new external input starts fresh work.
+	StopAndDiscard ControlMode = "stop_and_discard"
 	StopHard       ControlMode = "hard"
 	StopWhenIdle   ControlMode = "when_idle"
 	Heartbeat      ControlMode = "heartbeat"
@@ -81,7 +84,7 @@ func (input Input) DecodeControlMessage() (ControlMessage, error) {
 		return ControlMessage{}, fmt.Errorf("control mode %q does not accept parameters", request.Mode)
 	}
 	switch request.Mode {
-	case StopHard, StopWhenIdle:
+	case StopHard, StopWhenIdle, StopAndDiscard:
 	case Heartbeat:
 		if request.Reason == "" {
 			return ControlMessage{}, fmt.Errorf("heartbeat reason is empty")

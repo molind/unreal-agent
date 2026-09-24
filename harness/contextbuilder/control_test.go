@@ -15,6 +15,7 @@ func TestBuilderControlMessages(t *testing.T) {
 		text string
 	}{
 		{mode: inbox.Heartbeat, role: llm.RoleUser, text: "requested"},
+		{mode: inbox.StopAndDiscard, role: llm.RoleSystem, text: "The preceding work was stopped. Do not resume unfinished requests or retry interrupted tools unless a later user message explicitly asks you to."},
 		{mode: inbox.StopHard},
 		{mode: inbox.StopWhenIdle},
 	} {
