@@ -26,6 +26,10 @@ const help = `Enter a complete line to send a message (also while work is runnin
 /compact       Reopen the compaction approval menu (plain mode: /compact yes|no)
 /stop          Stop all current work; keep history; no automatic retry
 /exit, /quit   Stop work and exit (EOF also exits)
+On capable terminals /status, /help and /sessions open a snapshot viewer, not
+transcript output. Esc/q/Ctrl-C returns to history; Up/Down, PgUp/PgDn, Space and
+Home/End scroll. Pasted/typed commands in a viewer are ignored. New conversation
+output is retained until close; a full 1 MiB queue returns to history automatically.
 Terminal: arrows/Ctrl-B/F move; Home/End or Ctrl-A/E; Backspace/Delete;
 Ctrl-U/K clear before/after cursor; Ctrl-W deletes a word;
 Option/Alt-Left/Right move by word. Option+Return (or Ctrl-J) inserts a newline

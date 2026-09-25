@@ -16,6 +16,9 @@ func (t *Terminal) SetStatus(rows []string) error {
 		return nil
 	}
 	t.status = slices.Clone(rows)
+	if t.viewer != nil {
+		return nil
+	}
 	// ReadLine will render these if there is currently no editable region.
 	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
 		return nil
@@ -37,6 +40,9 @@ func (t *Terminal) SetPromptInfo(text string, color bool) error {
 		return nil
 	}
 	t.promptInfo, t.color = text, color
+	if t.viewer != nil {
+		return nil
+	}
 	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
 		return nil
 	}
@@ -156,7 +162,7 @@ func (t *Terminal) hideStatus() {
 }
 
 func (t *Terminal) fitStatus(lineLength int) {
-	if t.selection != nil {
+	if t.selection != nil || t.viewer != nil {
 		return
 	}
 	rows := t.statusRows(lineLength)

@@ -39,6 +39,9 @@ func (t *Terminal) OpenSelection(title string, choices []Choice) error {
 	if len(choices) == 0 {
 		return nil
 	}
+	if t.viewer != nil {
+		return fmt.Errorf("cannot open a selection while a viewer is open")
+	}
 	t.selection = &selection{title: title, choices: slices.Clone(choices)}
 	t.repaint(0)
 	_, err := t.c.Write(t.outBuf)
@@ -160,7 +163,7 @@ func (t *Terminal) CloseSelection() error {
 func (t *Terminal) TryOpenSelection(id, title string, choices []Choice) (bool, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	if t.selection != nil || len(choices) == 0 {
+	if t.selection != nil || t.viewer != nil || len(choices) == 0 {
 		return false, nil
 	}
 	t.selection = &selection{id: id, title: title, choices: slices.Clone(choices)}

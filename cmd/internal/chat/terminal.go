@@ -20,15 +20,16 @@ var errInputInterrupt = errors.New("terminal input interrupted")
 // x/term owns editing, history, wrapping, and the lock that serializes redraws
 // with ReadLine. The application remains the sole consumer of harness events.
 type terminalUI struct {
-	editor   *lineeditor.Terminal
-	input    *os.File
-	output   io.Writer
-	state    *term.State
-	control  int
-	width    int // Owned by the application event loop, like display state.
-	resize   chan os.Signal
-	failures chan error
-	once     sync.Once
+	editor         *lineeditor.Terminal
+	input          *os.File
+	output         io.Writer
+	state          *term.State
+	control        int
+	width          int  // Owned by the application event loop, like display state.
+	viewerDisabled bool // Unknown/non-xterm TERM: never risk clearing primary history.
+	resize         chan os.Signal
+	failures       chan error
+	once           sync.Once
 	// Transport and immutable paste attachments belong to the input goroutine.
 	reader                    *bufio.Reader
 	paste                     bool
@@ -56,6 +57,7 @@ func openTerminal(input io.ReadCloser, output io.Writer, getenv func(string) str
 		return nil, err
 	}
 	u := &terminalUI{input: in, output: output, state: state, control: fd, resize: make(chan os.Signal, 1), failures: make(chan error, 1)}
+	u.viewerDisabled = !viewerTerminal(getenv("TERM"))
 	u.initEditor()
 	signal.Notify(u.resize, unix.SIGWINCH)
 	if err = u.size(); err != nil {
@@ -80,13 +82,14 @@ func (u *terminalUI) close() error {
 	signal.Stop(u.resize)
 	// The reader has joined. Remove any still-animated status and leave the
 	// shell on a clean line, even if an error interrupted an unsubmitted draft.
+	_, viewerErr := u.editor.CloseViewer()
 	_ = u.editor.CloseSelection()
 	_ = u.editor.SetPromptInfo("", false)
 	_ = u.editor.SetStatus(nil)
 	_, _ = u.editor.Write(nil)
 	_, _ = u.Write([]byte("\x1b[J\r\n"))
 	u.editor.SetBracketedPasteMode(false)
-	err := errors.Join(term.Restore(u.control, u.state), unix.Close(u.control))
+	err := errors.Join(viewerErr, term.Restore(u.control, u.state), unix.Close(u.control))
 	select {
 	case outputErr := <-u.failures:
 		err = errors.Join(err, boundary("output terminal", outputErr))

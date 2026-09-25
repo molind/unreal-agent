@@ -24,6 +24,7 @@ type liveScreen struct {
 	width, height, x, y, offset int
 	rows                        [][]rune
 	history                     []string
+	primary                     *liveScreen // Saved while the alternate viewer is active.
 }
 
 func newLiveScreen(w, h int) *liveScreen {
@@ -32,6 +33,9 @@ func newLiveScreen(w, h int) *liveScreen {
 	return s
 }
 func (s *liveScreen) resize(w, h int) {
+	if s.primary != nil {
+		s.primary.resize(w, h)
+	}
 	rows := make([][]rune, h)
 	for i := range rows {
 		rows[i] = make([]rune, w)
@@ -78,8 +82,32 @@ func (s *liveScreen) update(output string) {
 				s.x = min(s.width-1, s.x+count)
 			case 68:
 				s.x = max(0, s.x-count)
+			case 'h':
+				if arg == "?1049" && s.primary == nil {
+					saved := *s
+					s.primary = &saved
+					s.rows, s.history = nil, nil
+					s.x, s.y = 0, 0
+					s.resize(s.width, s.height)
+				}
+			case 'l':
+				if arg == "?1049" && s.primary != nil {
+					offset := s.offset
+					*s = *s.primary
+					s.offset = offset
+				}
 			case 72:
-				s.x, s.y = 0, 0
+				parts := strings.Split(arg, ";")
+				row, col := 1, 1
+				if len(parts) > 0 {
+					value, _ := strconv.Atoi(parts[0])
+					row = max(1, value)
+				}
+				if len(parts) > 1 {
+					value, _ := strconv.Atoi(parts[1])
+					col = max(1, value)
+				}
+				s.x, s.y = min(s.width-1, col-1), min(s.height-1, row-1)
 			case 74:
 				if n == 2 {
 					for y := range s.rows {
@@ -324,7 +352,14 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	check()
 	screen.draft(t, smallDraft, 2)
-	// /status retains every operation, not just the bounded visible subset.
+	// /status retains every operation, not just the bounded live subset. Use a
+	// large report viewport here; dedicated viewer tests exercise pagination.
+	if err := cli.resize(40, 120); err != nil {
+		t.Fatal(err)
+	}
+	screen.resize(120, 40)
+	_ = cli.cmd.Process.Signal(unix.SIGWINCH)
+	time.Sleep(150 * time.Millisecond)
 	offset := len(cli.snapshot())
 	cli.send("\x05\x15/status\r")
 	until := time.Now().Add(8 * time.Second)
@@ -338,6 +373,7 @@ func TestTTYLiveStatusScreen(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	cli.closeViewer()
 	// A new session cancels work and clears live rows without stale tails.
 	before := strings.Count(cli.snapshot(), "Selected session")
 	cli.send("/new\r")

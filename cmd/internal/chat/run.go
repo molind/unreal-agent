@@ -283,6 +283,7 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 }
 
 type line struct {
+	viewer    *lineeditor.ViewerClosed
 	interrupt bool
 	cleared   bool
 	selection *lineeditor.Selection
@@ -360,6 +361,13 @@ func (a *application) event(e event) error {
 // stops work or exits. In particular, UI/model-response timing is not an idle
 // signal: tools can be translating, in grace, or awaiting a follow-up turn.
 func (a *application) interrupt() (bool, error) {
+	if a.display.ui != nil {
+		if closed, err := a.display.ui.editor.CloseViewer(); err != nil {
+			return false, err
+		} else if closed {
+			return false, a.offerCompactionMenu()
+		}
+	}
 	if r := a.runtime; r != nil {
 		// Bound the drain to this snapshot: continuously arriving progress
 		// must not postpone the stop control indefinitely.
@@ -528,14 +536,22 @@ func (a *application) command(text string) (bool, error) {
 	}
 	switch name {
 	case "/help":
-		return false, a.display.print("%s", help)
+		return false, a.report("Help", func(view *application) error { return view.display.print("%s", help) })
 	case "/status":
-		if err := a.announce(); err != nil {
-			return false, err
-		}
-		return false, a.display.status()
+		return false, a.report("Status", func(view *application) error {
+			if a.display.ui == nil || a.display.ui.viewerDisabled {
+				if err := view.announce(); err != nil {
+					return err
+				}
+				return view.display.status()
+			}
+			if err := view.display.status(); err != nil {
+				return err
+			}
+			return view.announce()
+		})
 	case "/sessions":
-		return false, a.listSessions()
+		return false, a.report("Saved sessions", func(view *application) error { return view.listSessions() })
 	case "/cancel":
 		id := operation.ID(fields[1])
 		notice, ok := a.display.operations[id]
@@ -612,6 +628,12 @@ func (a *application) command(text string) (bool, error) {
 // The empty ID is the unsaved conversation, not a second persistence flag.
 // Only acceptance of real user content crosses the durable creation boundary.
 func (a *application) accept(l line) (bool, error) {
+	if l.viewer != nil {
+		if l.viewer.Overflow {
+			return false, a.display.print("Viewer closed because queued output reached 1 MiB; all output was returned to the transcript.\n")
+		}
+		return false, nil
+	}
 	if l.interrupt {
 		if l.cleared {
 			return false, a.display.print("Draft cleared.\n")

@@ -89,6 +89,8 @@ type Terminal struct {
 	promptInfo   string
 	color        bool
 	selection    *selection
+	viewer       *viewer
+	viewerClosed *ViewerClosed
 
 	// line is the current line being entered.
 	line []rune
@@ -180,6 +182,8 @@ const (
 	keyPasteEnd
 	keyHistoryPrev
 	keyHistoryNext
+	keyPageUp
+	keyPageDown
 )
 
 var (
@@ -276,8 +280,15 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 		}
 	}
 
-	if !pasteActive && len(b) >= 4 && b[0] == keyEscape && b[1] == '[' && b[2] == '3' && b[3] == '~' {
-		return keyDelete, b[4:]
+	if !pasteActive && len(b) >= 4 && b[0] == keyEscape && b[1] == '[' && b[3] == '~' {
+		switch b[2] {
+		case '3':
+			return keyDelete, b[4:]
+		case '5':
+			return keyPageUp, b[4:]
+		case '6':
+			return keyPageDown, b[4:]
+		}
 	}
 
 	if !pasteActive && len(b) >= 6 && b[0] == keyEscape && b[1] == '[' && b[2] == '1' && b[3] == ';' && (b[4] == '3' || b[4] == '9') {
@@ -835,8 +846,21 @@ func writeWithCRLF(w io.Writer, buf []byte) (n int, err error) {
 func (t *Terminal) Write(buf []byte) (n int, err error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
+	if v := t.viewer; v != nil {
+		if len(buf) <= ViewerLimit-v.pending.Len() {
+			_, _ = v.pending.Write(buf)
+			t.drawViewer()
+			if err := t.flushViewer(); err != nil {
+				return 0, err
+			}
+			return len(buf), nil
+		}
+		if err := t.closeViewer(true); err != nil {
+			return 0, err
+		}
+	}
 
-	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
+	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && t.viewer == nil && !t.multiline() {
 		// This is the easy case: there's nothing on the screen that we
 		// have to move out of the way.
 		return writeWithCRLF(t.c, buf)
@@ -915,33 +939,35 @@ func (t *Terminal) ReadLine() (line string, err error) {
 }
 
 func (t *Terminal) readLine() (line string, err error) {
-	// t.lock must be held at this point
-
-	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && !t.multiline() {
+	// t.lock must be held at this point.
+	if t.cursorX == 0 && t.cursorY == 0 && t.selection == nil && t.viewer == nil && !t.multiline() {
 		t.writePrompt()
-		t.c.Write(t.outBuf)
-		t.outBuf = t.outBuf[:0]
+		if err := t.flushViewer(); err != nil {
+			return "", err
+		}
 	}
-
 	lineIsPasted := t.pasteActive
-
 	for {
 		rest := t.remainder
 		lineOk := false
 		var selected *Selection
+		var closed *ViewerClosed
 		for !lineOk {
+			if t.viewerClosed != nil {
+				closed, t.viewerClosed = t.viewerClosed, nil
+				lineOk = true
+				break
+			}
 			var key rune
 			key, rest = bytesToKey(rest, t.pasteActive)
 			if key == utf8.RuneError {
 				break
 			}
 			if !t.pasteActive {
-				if key == keyCtrlD {
-					if len(t.line) == 0 || t.selection != nil {
-						return "", io.EOF
-					}
+				if key == keyCtrlD && (len(t.line) == 0 || t.selection != nil || t.viewer != nil) {
+					return "", io.EOF
 				}
-				if key == keyCtrlC {
+				if key == keyCtrlC && t.viewer == nil {
 					return "", io.EOF
 				}
 				if key == keyPasteStart {
@@ -958,11 +984,17 @@ func (t *Terminal) readLine() (line string, err error) {
 			if !t.pasteActive {
 				lineIsPasted = false
 			}
-			// If we have CR, consume LF if present (CRLF sequence) to avoid returning an extra empty line.
 			if key == keyEnter && len(rest) > 0 && rest[0] == keyLF {
 				rest = rest[1:]
 			}
-			if t.selection != nil {
+			if t.viewer != nil {
+				if !t.pasteActive {
+					if err := t.viewerKey(key); err != nil {
+						return "", err
+					}
+				}
+				continue // No editing callbacks or history while viewing a report.
+			} else if t.selection != nil {
 				selected = t.selectionKey(key)
 				lineOk = selected != nil
 			} else {
@@ -978,9 +1010,13 @@ func (t *Terminal) readLine() (line string, err error) {
 		} else {
 			t.remainder = nil
 		}
-		t.c.Write(t.outBuf)
-		t.outBuf = t.outBuf[:0]
+		if err := t.flushViewer(); err != nil {
+			return "", err
+		}
 		if lineOk {
+			if closed != nil {
+				return "", closed
+			}
 			if selected != nil {
 				return "", selected
 			}
@@ -998,15 +1034,10 @@ func (t *Terminal) readLine() (line string, err error) {
 			t.readErr = nil
 			return
 		}
-
-		// t.remainder is a slice at the beginning of t.inBuf
-		// containing a partial key sequence
 		readBuf := t.inBuf[len(t.remainder):]
-
 		t.lock.Unlock()
 		n, readErr := t.c.Read(readBuf)
 		t.lock.Lock()
-
 		t.remainder = t.inBuf[:n+len(t.remainder)]
 		if readErr != nil {
 			t.readErr = readErr
@@ -1055,6 +1086,12 @@ func (t *Terminal) SetSize(width, height int) error {
 	width, height = max(1, width), max(1, height)
 	if width == t.termWidth && height == t.termHeight {
 		return nil
+	}
+	if t.viewer != nil {
+		t.termWidth, t.termHeight = width, height
+		t.viewer.layout(max(1, width-1))
+		t.drawViewer()
+		return t.flushViewer()
 	}
 	visible := t.cursorX != 0 || t.cursorY != 0 || t.selection != nil || t.multiline()
 	if visible {

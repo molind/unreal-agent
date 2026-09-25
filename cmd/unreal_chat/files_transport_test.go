@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"golang.org/x/sys/unix"
 )
 
 func TestTTYStructuredEditOverIncrementalWebsocket(t *testing.T) {
@@ -128,8 +129,15 @@ func testTTYStructuredEdit(t *testing.T, color bool) {
 			t.Fatal("diff background ignored NO_COLOR")
 		}
 	}
+	if err := cli.resize(30, 120); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.cmd.Process.Signal(unix.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
 	cli.send("/status\r")
 	cli.wait("Last response transport: websocket / incremental")
+	cli.closeViewer()
 	cli.send("/exit\r")
 	cli.finish(0)
 	content, _ := os.ReadFile(filepath.Join(workspace, "source.txt"))

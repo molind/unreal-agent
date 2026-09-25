@@ -210,7 +210,16 @@ func TestTTYSessionPickerSelectionContextAndLifecycle(t *testing.T) {
 	cli.wait("Session: seed-02")
 	cli.wait("SAVED ANSWER seed-02")
 	for range 5 {
+		before := strings.Count(cli.snapshot(), "\x1b[?1049h")
 		cli.send("/status\r")
+		until := time.Now().Add(8 * time.Second)
+		for strings.Count(cli.snapshot(), "\x1b[?1049h") == before {
+			if time.Now().After(until) {
+				t.Fatal("status viewer did not open")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		cli.closeViewer()
 	}
 	time.Sleep(300 * time.Millisecond)
 	s.check()

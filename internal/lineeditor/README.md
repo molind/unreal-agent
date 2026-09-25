@@ -24,7 +24,8 @@ alongside upstream's Alt arrows, all routed to the existing word-motion handlers
 As upstream, editable Unicode uses one cell per rune: Cyrillic works; wide and
 combining input is not fully supported. Status callers supply printable ASCII.
 Drafts taller than the terminal retain the upstream limited scrolling behavior;
-folded paste is recommended for large text. No alternate screen is used.
+folded paste is recommended for large text. Normal editing does not use an
+alternate screen; explicit report viewers do.
 
 `OpenSelection(title, choices)` (`selection.go`) is a transient input mode under the same lock,
 not another reader or renderer. `ReadLine` returns a typed `Selection` result
@@ -46,4 +47,20 @@ Multiline drafts use a source-rune layout and a height-bounded viewport under th
 same editor lock. Option+Return / Ctrl-J insert LF at column zero; Up/Down navigate
 text columns while Ctrl-P/N retain explicit history navigation. Single-line
 editing keeps the upstream incremental fast path. No mouse reporting, copy
-hitboxes, clipboard controls, or alternate screen are used.
+hitboxes or clipboard controls are used.
+
+`OpenViewer(title, text)` (`viewer.go`) is a separate read-only report mode for
+hosts that support xterm alternate buffers. It clears only the editable primary
+tail, enters 1049 alternate mode and wraps a snapshot into bounded rows. Esc/q or
+Ctrl-C returns a typed `ViewerClosed` event; arrows, PageUp/PageDown, Home/End and
+Space navigate without invoking editing/paste callbacks. Resize retains a source
+text anchor. Choosers and viewers are mutually exclusive; async approval choosers
+can be retried after the close event.
+
+Live status/prompt metadata updates continue in memory. `Write` queues transcript
+output (at most 1 MiB) until close. Overflow closes the viewer and delivers all
+queued and new output, never dropping a response. Snapshots are capped separately;
+hosts must handle `ErrViewerTooLarge` explicitly. `CloseViewer` is also required on
+EOF/shutdown and retries primary-screen restoration after a failed close. The host
+owns terminal-mode restoration. Report text is never interpreted as terminal ANSI.
+Plain and unknown terminals should use ordinary output instead of `OpenViewer`.

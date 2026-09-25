@@ -95,6 +95,32 @@ Live rows and repeated Working notices never enter the transcript. Command logs
 are unchanged. Plain/piped output retains the existing full-ID lifecycle notices
 and raw Markdown, without animation or terminal styling.
 
+### Report viewer
+
+On xterm-compatible terminals, **`/status`, `/help` and `/sessions` open a separate
+read-only snapshot viewer**, rather than dumping long reports into the conversation.
+The viewer uses the terminal's alternate screen; closing it restores the primary
+history, editable draft and cursor.
+
+- **Esc**, `q`, or **Ctrl-C** closes the viewer without stopping model/tool work.
+  After returning, Ctrl-C has its usual clear-draft/stop/exit behavior.
+- **Up/Down** (`k`/`j`), **PageUp/PageDown**, **Space** (next page), and **Home/End**
+  (`g`/`G`) navigate. Long lines wrap; resize keeps an approximate content anchor.
+- Paste is discarded and ordinary keys do not become user messages. `/resume`
+  remains the existing session chooser, not a report.
+- Live work continues. New transcript output is queued while viewing and appears
+  in order after close; the footer shows pending bytes. If the queue reaches
+  **1 MiB**, the viewer closes automatically and delivers all output, without
+  truncating responses. A report snapshot itself is capped at **1 MiB**, with an
+  explicit notice if it exceeds that bound.
+- Reports retain normal credential redaction. Terminal controls and ambiguous-width
+  Unicode are escaped for safe, predictable rows. `NO_COLOR` disables styling,
+  not navigation. EOF and shutdown restore the primary screen and terminal modes.
+
+Pipes, `TERM=dumb`, and terminal descriptions without known alternate-screen
+support keep ordinary text reports. The viewer does not change session storage,
+model context accounting, or the contents sent to the provider.
+
 ### Editing and colors
 
 On a TTY with `TERM` set (not `dumb`), a locally extended `golang.org/x/term` line editor
@@ -586,7 +612,8 @@ failures before log storage can be opened may only have stderr diagnostics.
   Forced termination/power loss cannot guarantee child cleanup or rollback.
   Existing unfinished sessions without a durable stop retain normal harness
   recovery behavior. Keep the same workspace when resuming custom storage.
-- This is not a full-screen UI or a browser. The Markdown view supports core
+- Conversation editing stays scrollback-based; only report viewers use an alternate
+  full-screen buffer. This is not a browser. The Markdown view supports core
   CommonMark, not extensions such as pipe tables or interactive links. Code is
   not reflowed or syntax highlighted. The editor supports
   single-cell Unicode such as Belarusian; complex combining/emoji/wide-glyph

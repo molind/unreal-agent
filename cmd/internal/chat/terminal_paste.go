@@ -162,6 +162,14 @@ func (u *terminalUI) readLine() (line, error) {
 	for {
 		text, err := u.editor.ReadLine()
 		if errors.Is(err, errInputInterrupt) {
+			if closed, closeErr := u.editor.CloseViewer(); closeErr != nil {
+				return line{}, closeErr
+			} else if closed {
+				// ReadLine's typed viewer event performs the normal handoff. Do
+				// not clear an existing draft or turn this into a stop/exit.
+				u.pasted, u.rejected = nil, ""
+				continue
+			}
 			cleared, clearErr := u.editor.ClearDraft()
 			if clearErr != nil {
 				return line{}, clearErr
@@ -173,6 +181,13 @@ func (u *terminalUI) readLine() (line, error) {
 			return line{interrupt: true, cleared: cleared}, nil
 		}
 		if err != nil {
+			var closed *lineeditor.ViewerClosed
+			if errors.As(err, &closed) {
+				u.pasted, u.rejected = nil, ""
+				// Like selectors, viewers preserve a draft that may still own
+				// attachment markers not yet present in submitted history.
+				return line{viewer: closed}, nil
+			}
 			var selected *lineeditor.Selection
 			if errors.As(err, &selected) {
 				u.pasted = nil // A paste in a menu is discarded, never a draft.

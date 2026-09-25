@@ -171,6 +171,23 @@ func (c *ttyCLI) wait(s string) {
 	}
 	c.t.Fatalf("timeout waiting for %.100q; tail: %s", s, tail(c.snapshot(), 1500))
 }
+func (c *ttyCLI) closeViewer() {
+	c.t.Helper()
+	text := c.snapshot()
+	if strings.LastIndex(text, "\x1b[?1049h") <= strings.LastIndex(text, "\x1b[?1049l") {
+		return
+	}
+	before := strings.Count(text, "\x1b[?1049l")
+	c.send("\x1b")
+	until := time.Now().Add(8 * time.Second)
+	for time.Now().Before(until) {
+		if strings.Count(c.snapshot(), "\x1b[?1049l") > before {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	c.t.Fatal("viewer did not restore primary screen")
+}
 func tail(s string, n int) string {
 	if len(s) > n {
 		return s[len(s)-n:]
@@ -238,6 +255,7 @@ func TestSharedTTYLongOutput(t *testing.T) {
 			}
 			cli.send("/status\r")
 			cli.wait("Status: idle")
+			cli.closeViewer()
 			if regexp.MustCompile(`\x1b\[[0-9;]*m`).MatchString(cli.snapshot()) == noColor {
 				t.Fatal("NO_COLOR/color not respected")
 			}
@@ -490,6 +508,7 @@ func TestTTYFaithfulPastesAndLimits(t *testing.T) {
 	noRequest()
 	cli.send("\r")
 	cli.wait("Status: idle")
+	cli.closeViewer()
 	noRequest()
 	// Recall still contains the full long block; insert typed text around it.
 	paste(long)
