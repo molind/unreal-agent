@@ -19,11 +19,24 @@ SQLite is pure Go (`modernc.org/sqlite`); no sqlite executable or CGo is require
 Main database permissions are 0600, new storage directories 0700. SQLite inherits
 that mode for WAL/SHM. Only local filesystems supporting locking are supported.
 SQLite transactions use WAL, synchronous=FULL, foreign keys and a bounded busy
-timeout. Version mismatches fail instead of guessing at migrations. A workspace
-writer lock covers the whole host process, including external filesystem edits;
-SQLite transaction locks alone cannot make those edits safe. Readers and backups
-may run concurrently. This first version allows one harness writer per workspace,
-not several simultaneous chat processes in different sessions of one workspace.
+timeout. Write transactions begin IMMEDIATE; read snapshots remain deferred.
+Version mismatches fail instead of guessing at migrations. Several chat/runner
+processes may use different sessions of the same workspace database concurrently.
+Each selected SQLite session has one exclusive lease, acquired before creation or
+restore and held through all runtime effects and cleanup. Session handoff evicts
+cached write state. Full replay captures history and operation references in one
+read snapshot before hydrating immutable artifacts. Readers and backups remain
+concurrent.
+
+Writable hosts enter through `localfile.OpenWorkspace`. `writer.lock` is shared
+for their lifetime and exclusive for offline migration (also excluding older
+exclusive-writer binaries). `session-<hash>.lock` guards each session; `open.lock`
+serializes WAL/schema initialization. A short-lived startup lease uses a permanent
+`.unreal-startup-<hash>.lock` beside the canonical storage directory, outside the
+legacy source tree so waiting hosts cannot confuse legacy-writer detection.
+Lock files are never unlinked; process exit releases the kernel locks. Do not
+remove lock files to bypass a live owner. Embedded callers using `NewSQLite`
+directly must supply equivalent ownership around runtime effects.
 
 ## Canonical history and artifacts
 
@@ -69,10 +82,13 @@ The import transaction and immutable alias make retries safe; changed spools are
 never silently rebound or deleted. Captures of possibly surviving processes are
 retained. Source bytes never disappear before the database owns a complete copy.
 File-tool revisions and receipts use namespaced metadata rows; complete diffs are
-artifacts. The per-operation receipt lock remains necessary (in-memory stripes
-within a process, plus the host writer lock across processes). Filesystem edits
-still use staged-file fsync, atomic rename/create, directory fsync, and separate
-intent/completion receipts. An uncertain interrupted edit is NOT repeated.
+artifacts. In-memory receipt stripes exclude duplicate execution within the owner;
+the session lease excludes the same operation across hosts. Target-file `flock`,
+revision hashes and identity rechecks protect cooperating edits from different
+sessions. Filesystem edits still use staged-file fsync, atomic rename/create,
+directory fsync, and separate intent/completion receipts. An uncertain interrupted
+edit is NOT repeated. Arbitrary Bash/external writers do not follow these locks;
+use separate worktrees when filesystem/build/git isolation is needed.
 
 ## Automatic migration and source cleanup
 
@@ -93,6 +109,10 @@ only known files, then prunes empty directories. Skills, experiments, unknown
 files and an in-place SQLite destination survive. A partial cleanup resumes from
 the manifest even if the original journals are already gone. Raw backups remain
 in compressed artifacts addressable through their original capture aliases.
+A separate `Completed` manifest flag is saved only after cleanup finishes. Normal
+startup skips completed sources (but rejects reappearing legacy journals), so it
+never scans or cleans another live SQLite session's spools. Pending legacy cleanup
+requires the exclusive maintenance lease and refuses to run alongside active hosts.
 
 Unfinished shell checkpoints are rebased only after new spool copies are synced;
 old events/tool text stay unchanged. In-place migrations use fresh `.migrated`

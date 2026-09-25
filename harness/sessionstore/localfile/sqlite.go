@@ -196,18 +196,17 @@ func (s *Store) sqlRefs(ctx context.Context, id session.ID, query string, args .
 	return refs, rows.Err()
 }
 func (s *Store) sqlState(ctx context.Context, id session.ID) (storedState, int64, error) {
-	snapshot, count, err := s.sqlHeader(ctx, id)
+	header, count, records, opRefs, err := s.sqlStateSnapshot(ctx, id)
 	if err != nil {
 		return storedState{}, 0, err
 	}
-	records, err := s.sqlHistory(ctx, "SELECT number,payload FROM events WHERE session=? AND kind='item' ORDER BY number", id)
+	// Only immutable artifact references are hydrated after releasing the read
+	// transaction, avoiding nested queries on our single connection.
+	encoded, err := s.database.JSON(ctx, header)
 	if err != nil {
 		return storedState{}, 0, err
 	}
-	encoded, err := encodeInitialLog(snapshot.Session, nil)
-	if err != nil {
-		return storedState{}, 0, err
-	}
+	encoded = append(encoded, '\n')
 	for _, record := range records {
 		raw, err := s.historyJSON(ctx, id, record)
 		if err != nil {
@@ -215,10 +214,6 @@ func (s *Store) sqlState(ctx context.Context, id session.ID) (storedState, int64
 		}
 		encoded = append(encoded, raw...)
 		encoded = append(encoded, '\n')
-	}
-	opRefs, err := s.sqlRefs(ctx, id, "SELECT payload FROM operations WHERE session=? ORDER BY id", id)
-	if err != nil {
-		return storedState{}, 0, err
 	}
 	for _, ref := range opRefs {
 		raw, err := s.database.JSON(ctx, ref)
@@ -236,6 +231,9 @@ func (s *Store) sqlState(ctx context.Context, id session.ID) (storedState, int64
 		encoded = append(encoded, line...)
 	}
 	state, _, err := decodeLog(encoded)
+	if err == nil && state.Snapshot.Session.ID != id {
+		err = fmt.Errorf("invalid SQLite session header")
+	}
 	return state, count, err
 }
 func (s *Store) sqlItems(ctx context.Context, id session.ID, after sessionstore.Sequence, limit int) (sessionstore.Page, error) {

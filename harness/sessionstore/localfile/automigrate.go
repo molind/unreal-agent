@@ -30,6 +30,7 @@ type migrationFile struct {
 type migrationManifest struct {
 	Version     int
 	Verified    bool
+	Completed   bool // Saved only after all source cleanup has finished.
 	Files       []migrationFile
 	Directories []string
 }
@@ -63,7 +64,11 @@ func (s *Store) MigrateLegacy(ctx context.Context, directory string) error {
 	info, err := os.Lstat(source)
 	if errors.Is(err, os.ErrNotExist) {
 		if known && manifest.Verified {
-			return pruneLegacyParents(source)
+			if err = pruneLegacyParents(source); err != nil {
+				return err
+			}
+			manifest.Completed = true
+			return s.saveManifest(ctx, source, manifest)
 		}
 		return nil
 	}
@@ -208,7 +213,11 @@ func (s *Store) MigrateLegacy(ctx context.Context, directory string) error {
 	if !os.SameFile(info, named) {
 		return errors.New("legacy directory changed during cleanup")
 	}
-	return pruneLegacyParents(source)
+	if err = pruneLegacyParents(source); err != nil {
+		return err
+	}
+	manifest.Completed = true
+	return s.saveManifest(ctx, source, manifest)
 }
 
 func (s *Store) saveManifest(ctx context.Context, source string, manifest migrationManifest) error {

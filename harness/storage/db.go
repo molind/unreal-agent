@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
@@ -54,6 +55,15 @@ func Open(directory string) (*DB, error) {
 	if err = os.MkdirAll(absolute, 0700); err != nil {
 		return nil, err
 	}
+	// Serialize initial WAL/schema setup, including direct readers and library
+	// callers that do not take the host startup lease.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, err := lock(ctx, filepath.Join(absolute, "open.lock"), unix.LOCK_EX, true)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	path := filepath.Join(absolute, Filename)
 	// Refuse symlink/nonregular database and sidecars, and create the main file
 	// privately before SQLite creates its journals (which inherit its mode).
@@ -76,6 +86,10 @@ func Open(directory string) (*DB, error) {
 	}
 	uri := url.URL{Scheme: "file", Path: path}
 	query := uri.Query()
+	// Take the write reservation before reads in a write transaction. Upgrading
+	// a stale WAL read snapshot otherwise fails immediately despite busy_timeout.
+	// The driver keeps explicitly ReadOnly transactions deferred.
+	query.Set("_txlock", "immediate")
 	// Apply these to every replacement connection, including after cancellation.
 	for _, pragma := range []string{"busy_timeout(5000)", "foreign_keys(1)", "synchronous(FULL)"} {
 		query.Add("_pragma", pragma)
@@ -129,19 +143,15 @@ func (db *DB) Close() error {
 	return errors.Join(err, db.DB.Close())
 }
 
-// LockWriter permits readers/exports but only one harness process per workspace.
-// SQLite's transaction lock alone cannot protect a filesystem Edit/Write that
-// spans two database commits. Never hold an SQL transaction across that edit.
+// LockWriter is an offline maintenance lease, incompatible with every host.
+// Keep the historical filename/mode so older exclusive-writer binaries also
+// exclude new hosts. Normal hosts use LockHost plus LockSession instead.
 func (db *DB) LockWriter() (func() error, error) {
-	f, err := os.OpenFile(filepath.Join(filepath.Dir(db.Path), "writer.lock"), os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0600)
+	release, err := lock(context.Background(), filepath.Join(filepath.Dir(db.Path), "writer.lock"), unix.LOCK_EX, false)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("workspace storage is in use; close chat/runner processes before maintenance: %w", err)
 	}
-	if err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("workspace storage already has a writer: %w", err)
-	}
-	return f.Close, nil
+	return release, nil
 }
 
 func Hash(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }

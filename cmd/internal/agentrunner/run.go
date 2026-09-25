@@ -295,6 +295,7 @@ func Run(
 		return errors.New("storage-format must be jsonl or sqlite")
 	}
 	var store *localfile.Store
+	releaseStorage := func() error { return nil }
 	if *storageFormat == "sqlite" {
 		if strings.TrimSpace(*sessionDirectory) == "" {
 			storeDirectory, err = storage.Directory(workspace, getenv)
@@ -302,36 +303,31 @@ func Run(
 				return err
 			}
 		}
-		store, err = localfile.NewSQLite(storeDirectory)
+		store, releaseStorage, err = localfile.OpenWorkspace(ctx, storeDirectory, workspace)
 	} else {
 		store, err = localfile.New(storeDirectory)
 	}
 	if err != nil {
 		return fmt.Errorf("open session store: %w", err)
 	}
-	defer func() { runErr = errors.Join(runErr, store.Close()) }()
-	if store.Database() != nil {
-		release, err := store.Database().LockWriter()
-		if err != nil {
-			return err
-		}
-		defer release()
-		if err := store.Database().BindWorkspace(ctx, workspace); err != nil {
-			return err
-		}
-		for _, directory := range []string{filepath.Join(workspace, ".harness", "sessions"), storeDirectory} {
-			if err := store.MigrateLegacy(ctx, directory); err != nil {
-				return err
-			}
-		}
-	} else {
+	defer func() { runErr = errors.Join(runErr, store.Close(), releaseStorage()) }()
+	if store.Database() == nil {
 		lease, err := storage.LockLegacyDirectory(storeDirectory, false)
 		if err != nil {
 			return err
 		}
 		defer lease.Close()
 	}
-	sessionID, restored, err := openSession(ctx, store, parsed.SessionID)
+	requested := uuid.New().String()
+	if parsed.SessionID != nil {
+		requested = strings.TrimSpace(*parsed.SessionID)
+	}
+	releaseSession, err := store.LockSession(session.ID(requested))
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, releaseSession()) }()
+	sessionID, restored, err := openSession(ctx, store, &requested)
 	if err != nil {
 		return err
 	}
@@ -406,10 +402,20 @@ func Run(
 	}
 
 	operations := operation.NewLocalOperationManagerWithStorage(runContext, store.Database(), configuredTools.RemoteJobs...)
+	defer func() {
+		cancel()
+		for range operations.Updates() {
+		}
+	}()
 	inputs, err := inbox.New(runContext, restored.ExternalInputIDs)
 	if err != nil {
 		return fmt.Errorf("open inbox: %w", err)
 	}
+	defer func() {
+		cancel()
+		for range inputs.Output() {
+		}
+	}()
 	settingsPayload, err := json.Marshal(inbox.ControlMessage{
 		Mode: inbox.UpdateSettings,
 		Parameters: inbox.Settings{

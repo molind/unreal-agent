@@ -89,6 +89,9 @@ func (m *fileMetadata) readRevision(token string, value *fileRevision) error {
 func (m *fileMetadata) journal(ctx context.Context, id string) (*fileJournal, error) {
 	j := &fileJournal{metadata: m, id: id}
 	if m.db != nil {
+		// Hosts hold the session lease across all operations/recovery, excluding
+		// the same receipt in another process. These stripes exclude duplicate
+		// executions within that owner; target-file flock handles other sessions.
 		hash := sha256.Sum256([]byte(m.base + "/" + id))
 		mu := &fileOperationLocks[int(hash[0])%len(fileOperationLocks)]
 		for !mu.TryLock() {

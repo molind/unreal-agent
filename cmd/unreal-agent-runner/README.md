@@ -35,8 +35,12 @@ benchmark/script consumers. Select `-storage-format sqlite` to use the same XDG
 workspace database, compressed artifacts, and file revision/receipt storage as
 `unreal_chat`. With SQLite and no directory override, the path is
 `${XDG_STATE_HOME:-$HOME/.local/state}/unreal-agent/workspaces/<workspace-id>`.
-Only one SQLite harness writer per workspace may run at a time. Standard output
-remains JSONL regardless of the storage backend. See
+SQLite runners and chats may work concurrently in one workspace, with one owner
+per session. Resuming an already-owned session fails before starting operations.
+Migration remains exclusive; close older exclusive-writer binaries after upgrading.
+Shared workspace files are not isolated (use git worktrees for independent Bash,
+build or git activity). Standard output remains JSONL regardless of the storage
+backend. See
 [storage and migration](../unreal_chat/README.md#sqlite-storage-and-migration) for
 automatic verified legacy migration/cleanup, `unreal-storage` inspection,
 artifact export and backup. SQLite startup migrates workspace `.harness/sessions`

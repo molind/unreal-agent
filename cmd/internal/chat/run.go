@@ -76,11 +76,13 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 	}
 	stage = "storage"
 	id = session.ID(c.session)
-	opened, err := openSession(ctx, store, c.session)
+	a := &application{ctx: ctx, config: c, store: store, display: d, logs: log}
+	defer func() { result = errors.Join(result, a.releaseSelection()) }()
+	a.id, a.sessionRelease, err = openSession(ctx, store, c.session)
 	if err != nil {
 		return err
 	}
-	id = opened
+	id = a.id
 	stage = "provider setup"
 	client, err := c.client(providers, getenv)
 	if err != nil {
@@ -118,7 +120,7 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 			return boundary("terminal prompt", err)
 		}
 	}
-	a := &application{ctx: ctx, config: c, store: store, id: id, display: d, client: client, logs: log}
+	a.client = client
 	defer func() { result = errors.Join(result, a.stop()) }()
 	stage = "output startup"
 	if err := a.announce(); err != nil {
@@ -303,6 +305,7 @@ type application struct {
 	logs              *logs
 	approvalMenuShown string
 	stopping          bool
+	sessionRelease    func() error // Held while selected, including /stop and idle.
 }
 
 func runtimeError(err error) error {
@@ -443,15 +446,19 @@ func (a *application) announce() error {
 	return a.display.print("%s", text)
 }
 
-func openSession(ctx context.Context, store *localfile.Store, requested string) (session.ID, error) {
-	if requested != "" {
-		id := session.ID(requested)
-		if _, err := store.Resume(ctx, id); err != nil {
-			return "", fmt.Errorf("resume session %q: %w", id, err)
-		}
-		return id, nil
+func openSession(ctx context.Context, store *localfile.Store, requested string) (session.ID, func() error, error) {
+	if requested == "" {
+		return "", nil, nil
 	}
-	return "", nil
+	id := session.ID(requested)
+	release, err := store.LockSession(id)
+	if err != nil {
+		return "", nil, err
+	}
+	if _, err := store.Resume(ctx, id); err != nil {
+		return "", nil, errors.Join(fmt.Errorf("resume session %q: %w", id, err), release())
+	}
+	return id, release, nil
 }
 func (a *application) replay() error {
 	if a.id == "" {
@@ -592,31 +599,12 @@ func (a *application) command(text string) (bool, error) {
 		if name == "/resume" {
 			requested = fields[1]
 		}
-		id, err := openSession(a.ctx, a.store, requested)
+		failure, err := a.switchSession(requested)
 		if err != nil {
 			if logErr := a.logs.event("storage", "resume_failed", session.ID(requested), "", err); logErr != nil {
 				return false, logErr
 			}
-			return false, a.display.print("Cannot switch: %v. Current session retained (work stopped).\n", err)
-		}
-		old, oldDisplay := a.id, *a.display
-		a.id = id
-		if err := a.replay(); err != nil {
-			a.id, *a.display = old, oldDisplay
-			if logErr := a.logs.event("storage", "replay_failed", id, "", err); logErr != nil {
-				return false, logErr
-			}
-			return false, a.display.print("Cannot replay selected session: %v. Current session retained (work stopped).\n", err)
-		}
-		if err := a.announce(); err != nil {
-			return false, err
-		}
-		if err := a.start(); err != nil {
-			a.id, *a.display = old, oldDisplay
-			if logErr := a.logs.event("runtime", "start_failed", id, "", err); logErr != nil {
-				return false, logErr
-			}
-			return false, a.display.print("Cannot start selected session: %v. Current session retained (work stopped).\n", err)
+			return false, a.display.print("Cannot %s: %v. Current session retained (work stopped).\n", failure, err)
 		}
 		return false, nil
 	case "/exit", "/quit":
@@ -662,6 +650,11 @@ func (a *application) accept(l line) (bool, error) {
 	input := newInput(inbox.InputExternal, l.text)
 	if a.id == "" {
 		id := session.ID(uuid.New().String())
+		release, err := a.store.LockSession(id)
+		if err != nil {
+			return false, boundary("storage session lease", err)
+		}
+		a.sessionRelease = release
 		if _, err := a.store.Create(a.ctx, id); err != nil {
 			return false, boundary("storage create", err)
 		}

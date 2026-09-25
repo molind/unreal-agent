@@ -87,6 +87,13 @@ Flags must precede the command.`)
 			return err
 		}
 	}
+	if command == "migrate" {
+		startup, err := storage.LockStartup(ctx, dir)
+		if err != nil {
+			return err
+		}
+		defer startup()
+	}
 	store, err := localfile.NewSQLite(dir)
 	if err != nil {
 		return err

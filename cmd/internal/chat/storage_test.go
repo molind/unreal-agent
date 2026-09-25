@@ -65,7 +65,7 @@ func TestSQLiteChatEndToEndArtifactsFilesResumeAndLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range files {
-		if name != storage.Filename && name != storage.Filename+"-wal" && name != storage.Filename+"-shm" && name != "writer.lock" {
+		if name != storage.Filename && name != storage.Filename+"-wal" && name != storage.Filename+"-shm" && name != "writer.lock" && name != "open.lock" && name != "startup.lock" && !(strings.HasPrefix(name, "session-") && strings.HasSuffix(name, ".lock")) {
 			t.Fatal("loose session file", name)
 		}
 	}

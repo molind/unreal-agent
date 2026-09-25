@@ -7,7 +7,7 @@ import (
 )
 
 // CleanupCaptures completes a checkpoint-committed/unlink-interrupted cleanup.
-// Hosts call it while holding the workspace writer lock, before starting jobs.
+// Hosts call it while holding this session's lease, before starting its jobs.
 // Read-only Inspect/Items/Resume never perform this filesystem mutation.
 func (s *Store) CleanupCaptures(ctx context.Context, id session.ID) error {
 	if s.database == nil {

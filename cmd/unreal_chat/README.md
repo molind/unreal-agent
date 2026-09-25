@@ -486,9 +486,23 @@ The database contains append-only session events, latest operation states, redac
 logs, file revision bindings and edit receipts. Large repeated text/image payloads
 are content-addressed; stdout/stderr and complete diffs use independently compressed
 128 KiB blocks. Compression is lossless; context compaction still retains original
-history. One database, WAL/SHM sidecars while active, and one workspace writer-lock
-file replace per-operation metadata/log files. One harness writer per workspace is
-supported; readers and backups may run concurrently.
+history. One database, WAL/SHM sidecars while active, and small coordination lock
+files replace per-operation metadata/log files. **Multiple chat/runner processes
+can work in the same repository concurrently**, using different sessions in this
+one database. Just open another `unreal_chat` for the same workspace; no separate
+storage directory is needed. Readers and backups may also run concurrently.
+
+A selected SQLite session belongs to only one process. A second `-session ID` or
+`/resume ID` reports that the session is already in use, without starting its
+operations. `/stop` keeps ownership; `/new`, a successful switch, or exit releases
+it after joining tools. A failed switch keeps the original session available.
+After upgrading, close older running chat/runner processes once: their old
+exclusive workspace lock intentionally still excludes new hosts.
+
+This is not filesystem isolation. `Edit`/`Write` detect conflicting revisions and
+use file locks/atomic replacement; a conflicting agent must read again. Arbitrary
+Bash commands, builds and git commands can still interfere with one another.
+Use separate git worktrees when those activities need isolation.
 
 Bash writes to ordinary durable spool files while running. Closed captures are
 imported before a terminal checkpoint commits and removed only after that commit.
@@ -522,8 +536,11 @@ Never copy only the main `.sqlite3` file while WAL is active.
 
 ### Existing JSONL history
 
-Migration is **automatic on SQLite startup**. Close the old chat/runner, then
-start the new chat normally, including `-session SESSION_ID` if desired. Startup
+Migration is **automatic on SQLite startup**, and requires exclusive maintenance
+access only while legacy import/cleanup is pending. Once completed, new processes
+skip that cleanup and can start alongside active SQLite sessions. Close the old
+chat/runner, then start the new chat normally, including `-session SESSION_ID` if
+desired. Startup
 checks `<workspace>/.harness/sessions` and the selected storage directory, imports
 legacy history, verifies the exact archived bytes and canonical event prefix, then
 removes the migrated files. `.harness` is removed **only when empty**: skills,
@@ -607,8 +624,9 @@ failures before log storage can be opened may only have stderr diagnostics.
   This is **not** an enforced read-only mode, sandbox, or approval system.
 - Bash (`/bin/sh`), ViewImage, Read, Edit and Write are available. No remote tools, skill discovery,
   background jobs surviving exit, or multiple agents are added by this MVP.
-- SQLite enforces one harness writer per workspace. In legacy JSONL mode use
-  only one process per session; that backend has no cross-process session lock.
+- SQLite permits parallel processes in different sessions of one workspace,
+  with one owner per selected session. In legacy JSONL mode use only one process
+  per session; that backend has no cross-process session lock.
   Forced termination/power loss cannot guarantee child cleanup or rollback.
   Existing unfinished sessions without a durable stop retain normal harness
   recovery behavior. Keep the same workspace when resuming custom storage.
