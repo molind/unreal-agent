@@ -98,8 +98,15 @@ func TestJSONManifestPreservesNumbersAndUserObjects(t *testing.T) {
 	if !bytes.Equal(a, b) {
 		t.Fatal("JSON changed")
 	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("JSON representation changed")
+	}
+	encodedText, err := json.Marshal(text)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var n int
-	if err = db.QueryRow("SELECT count(*) FROM artifacts WHERE id=?", Hash([]byte(text))).Scan(&n); err != nil || n != 1 {
+	if err = db.QueryRow("SELECT count(*) FROM artifacts WHERE id=?", Hash(encodedText)).Scan(&n); err != nil || n != 1 {
 		t.Fatal("missing shared string", n, err)
 	}
 }

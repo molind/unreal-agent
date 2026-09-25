@@ -32,16 +32,16 @@ func (s *Store) ExportJSONL(ctx context.Context, id session.ID, w io.Writer) err
 	if err = s.database.QueryRowContext(ctx, "SELECT header FROM sessions WHERE id=?", id).Scan(&header); err != nil {
 		return err
 	}
-	refs, err := s.sqlRefs(ctx, id, "SELECT payload FROM events WHERE session=? AND number<? ORDER BY number", id, count)
+	records, err := s.sqlHistory(ctx, "SELECT number,payload FROM events WHERE session=? AND number<? ORDER BY number", id, count)
 	if err != nil {
 		return err
 	}
-	refs = append([]string{header}, refs...)
-	if int64(len(refs)) != count {
+	records = append([]historyRecord{{Number: 0, Ref: header}}, records...)
+	if int64(len(records)) != count {
 		return fmt.Errorf("incomplete session event journal")
 	}
-	for _, ref := range refs {
-		raw, err := s.database.JSON(ctx, ref)
+	for _, record := range records {
+		raw, err := s.historyJSON(ctx, id, record)
 		if err != nil {
 			return err
 		}

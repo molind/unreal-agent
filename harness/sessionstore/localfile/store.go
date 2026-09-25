@@ -28,6 +28,8 @@ type cachedWriteState struct {
 }
 
 type Store struct {
+	originalsMutex       sync.Mutex
+	originals            map[session.ID][][]byte
 	database             *storage.DB
 	directory            string
 	writeStateCacheMutex sync.Mutex

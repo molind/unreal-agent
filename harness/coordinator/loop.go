@@ -620,7 +620,7 @@ func (current *coordinator) restoreItem(item sessionstore.Item) error {
 			}
 		}
 	}
-	_, err := current.addItemToLocalState(item)
+	_, err := current.applyItemToLocalState(item, true)
 	return err
 }
 
@@ -628,9 +628,11 @@ func toolCallRequiresTranslator(status sessionstore.ToolCallStatus) bool {
 	return status.Status.Error == "" || len(status.Status.WaitingFor) != 0 || len(status.Operations) != 0
 }
 
-func (current *coordinator) addItemToLocalState(
-	item sessionstore.Item,
-) (sessionstore.Item, error) {
+func (current *coordinator) addItemToLocalState(item sessionstore.Item) (sessionstore.Item, error) {
+	return current.applyItemToLocalState(item, false)
+}
+
+func (current *coordinator) applyItemToLocalState(item sessionstore.Item, restoring bool) (sessionstore.Item, error) {
 	switch item.Kind {
 	case sessionstore.ItemFork:
 		if _, ok := item.Data.(sessionstore.Fork); !ok {
@@ -738,7 +740,17 @@ func (current *coordinator) addItemToLocalState(
 				return sessionstore.Item{}, err
 			}
 			if err := b.ApplyCompaction(plan, text); err != nil {
-				return sessionstore.Item{}, err
+				if !restoring || !current.dependencies.RecoverStaleCompactions || !errors.Is(err, contextbuilder.ErrCompactionMismatch) {
+					return sessionstore.Item{}, err
+				}
+				// A summary is a derived projection. Keep the full canonical
+				// transcript; never rewrite its hash or apply an unverified summary.
+				if warn := current.dependencies.OnCompactionSkipped; warn != nil {
+					if err := warn(response.TurnID, err); err != nil {
+						return sessionstore.Item{}, err
+					}
+				}
+				return item, nil
 			}
 			current.recovery.maxPrefixItems = 0
 			return item, nil

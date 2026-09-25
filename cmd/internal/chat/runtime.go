@@ -24,6 +24,7 @@ import (
 )
 
 type event struct {
+	warning string
 	context *contextbuilder.Status
 	idle    *bool
 	item    *sessionstore.Item
@@ -116,8 +117,16 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 		builder.AddTool(definition.Tool)
 	}
 	current := coordinator.New(coordinator.Dependencies{
-		OnIdleChange:    func(idle bool) { emit(event{idle: &idle}) },
-		RecoverContext:  true,
+		OnIdleChange:            func(idle bool) { emit(event{idle: &idle}) },
+		RecoverContext:          true,
+		RecoverStaleCompactions: true,
+		OnCompactionSkipped: func(turn session.TurnID, cause error) error {
+			if err := log.event("history", "stale_compaction_skipped", id, "", fmt.Errorf("turn %s: %w", turn, cause)); err != nil {
+				return err
+			}
+			emit(event{warning: "Saved compaction did not match restored history; ignored that summary and kept the full transcript. Context may need compaction again."})
+			return nil
+		},
 		OnContextChange: func(status contextbuilder.Status) { emit(event{context: &status}) },
 		JoinModels:      true, SessionID: id, Inbox: inputs, Restored: restored,
 		Sessions: observedStore{Store: store, emit: emit, logs: log}, ContextBuilder: builder,

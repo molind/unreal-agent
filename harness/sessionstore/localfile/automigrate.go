@@ -404,7 +404,19 @@ func (s *Store) verifyImportedJournal(ctx context.Context, source string, file m
 		return errors.New("imported history prefix is incomplete")
 	}
 	for i, ref := range refs {
-		got, err := s.database.JSON(ctx, ref)
+		got, exact, err := s.database.JSONExact(ctx, ref)
+		if err != nil {
+			return err
+		}
+		if exact {
+			if !bytes.Equal(got, lines[i]) {
+				return fmt.Errorf("imported JSON representation differs at record %d", i)
+			}
+			continue
+		}
+		// Old format-1 imports normalized object order. Their raw archive is
+		// retained and the read view can restore its bytes after this check.
+		got, err = canonicalMigrationJSON(got)
 		if err != nil {
 			return err
 		}

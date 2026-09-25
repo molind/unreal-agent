@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +41,11 @@ func seedContextChat(t *testing.T, workspace string) *localfile.Store {
 		if err := store.AppendTurn(t.Context(), id, turn); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.AppendModelResponse(t.Context(), id, sessionstore.ModelResponse{TurnID: turn.ID, Response: reply(fmt.Sprintf("completed-%d", i))}); err != nil {
+		response := reply(fmt.Sprintf("completed-%d", i))
+		response.Output = append([]llm.Item{{Type: llm.ItemReasoning, Data: llm.Reasoning{
+			Raw: jsontext.Value(`{"type":"reasoning","id":"fixture","summary":[],"encrypted_content":"opaque-fixture"}`),
+		}}}, response.Output...)
+		if err := store.AppendModelResponse(t.Context(), id, sessionstore.ModelResponse{TurnID: turn.ID, Response: response}); err != nil {
 			t.Fatal(err)
 		}
 		previous = turn.ID

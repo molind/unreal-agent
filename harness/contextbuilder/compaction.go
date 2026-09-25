@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -169,9 +170,18 @@ func CompactionSummary(response llm.Response) (string, error) {
 func summaryItem(text string) llm.Item {
 	return llm.Item{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: summaryPrefix + text}}
 }
+
+// ErrCompactionMismatch identifies a stale derived projection, not a provider
+// authentication failure. It is safe to keep full history instead of applying
+// the summary; it is never safe to apply that summary without its matching hash.
+var ErrCompactionMismatch = errors.New("context compaction prefix does not match saved history")
+
 func (b *builder) ValidateCompaction(plan session.ContextCompaction, text string) error {
-	if plan.Version != 1 || plan.PrefixItems < 1 || plan.PrefixItems >= len(b.committedPrefix) || plan.SummaryTokens < 1 {
+	if plan.Version != 1 || plan.PrefixItems < 1 || plan.SummaryTokens < 1 {
 		return fmt.Errorf("invalid or unsupported context compaction checkpoint")
+	}
+	if plan.PrefixItems >= len(b.committedPrefix) {
+		return fmt.Errorf("saved prefix is unavailable: %w", ErrCompactionMismatch)
 	}
 	end := plan.PrefixItems + 1
 	built, err := b.Build()
@@ -179,14 +189,14 @@ func (b *builder) ValidateCompaction(plan session.ContextCompaction, text string
 		return err
 	}
 	if !slices.Contains(b.responseEnds, end) || !b.safeCut(built.Request.Input, end) {
-		return fmt.Errorf("invalid or unsupported context compaction checkpoint")
+		return fmt.Errorf("saved prefix boundary changed: %w", ErrCompactionMismatch)
 	}
 	hash, err := prefixHash(b.committedPrefix[1:end])
 	if err != nil {
 		return err
 	}
 	if hash != plan.PrefixHash {
-		return fmt.Errorf("context compaction prefix does not match saved history")
+		return ErrCompactionMismatch
 	}
 	if strings.TrimSpace(text) == "" || (len(text)+2)/3 > plan.SummaryTokens {
 		return fmt.Errorf("context summary is empty or exceeds its token budget")

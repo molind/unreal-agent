@@ -19,6 +19,11 @@ type Dependencies struct {
 	RecoverContext bool
 	// Called on the coordinator goroutine; observers must not reenter it.
 	OnContextChange func(contextbuilder.Status)
+	// Opt in to replaying full canonical history instead of a stale saved
+	// compaction. The invalid summary is never applied. Callback failures remain
+	// fatal; hosts should make this recovery visible to the user.
+	RecoverStaleCompactions bool
+	OnCompactionSkipped     func(session.TurnID, error) error
 
 	// OnIdleChange observes settled scheduling state, initially and on changes.
 	// Idle means no pending input, model request, or tool work. Called on the

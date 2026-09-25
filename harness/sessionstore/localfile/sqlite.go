@@ -67,6 +67,8 @@ func (s *Store) sqlCreate(state storedState) error {
 }
 
 func (s *Store) sqlRecord(ctx context.Context, tx *sql.Tx, id session.ID, number int64, line []byte) error {
+	// The JSONL delimiter belongs to export, not to the stored JSON value.
+	line = bytes.TrimSuffix(line, []byte{'\n'})
 	var record logRecord
 	if err := json.Unmarshal(line, &record); err != nil {
 		return err
@@ -198,7 +200,7 @@ func (s *Store) sqlState(ctx context.Context, id session.ID) (storedState, int64
 	if err != nil {
 		return storedState{}, 0, err
 	}
-	refs, err := s.sqlRefs(ctx, id, "SELECT payload FROM events WHERE session=? AND kind='item' ORDER BY number", id)
+	records, err := s.sqlHistory(ctx, "SELECT number,payload FROM events WHERE session=? AND kind='item' ORDER BY number", id)
 	if err != nil {
 		return storedState{}, 0, err
 	}
@@ -206,8 +208,8 @@ func (s *Store) sqlState(ctx context.Context, id session.ID) (storedState, int64
 	if err != nil {
 		return storedState{}, 0, err
 	}
-	for _, ref := range refs {
-		raw, err := s.database.JSON(ctx, ref)
+	for _, record := range records {
+		raw, err := s.historyJSON(ctx, id, record)
 		if err != nil {
 			return storedState{}, 0, err
 		}
@@ -247,16 +249,16 @@ func (s *Store) sqlItems(ctx context.Context, id session.ID, after sessionstore.
 	if limit < int(^uint(0)>>1) {
 		queryLimit++
 	}
-	refs, err := s.sqlRefs(ctx, id, "SELECT payload FROM events WHERE session=? AND sequence>? ORDER BY sequence LIMIT ?", id, int64(after), queryLimit)
+	records, err := s.sqlHistory(ctx, "SELECT number,payload FROM events WHERE session=? AND sequence>? ORDER BY sequence LIMIT ?", id, int64(after), queryLimit)
 	if err != nil {
 		return sessionstore.Page{}, err
 	}
-	page := sessionstore.Page{NextAfter: after, More: len(refs) > limit}
+	page := sessionstore.Page{NextAfter: after, More: len(records) > limit}
 	if page.More {
-		refs = refs[:limit]
+		records = records[:limit]
 	}
-	for _, ref := range refs {
-		raw, err := s.database.JSON(ctx, ref)
+	for _, record := range records {
+		raw, err := s.historyJSON(ctx, id, record)
 		if err != nil {
 			return sessionstore.Page{}, err
 		}

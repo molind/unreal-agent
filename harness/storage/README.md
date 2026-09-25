@@ -34,13 +34,26 @@ transient operation checkpoint. Canonical JSONL export includes all checkpoints.
 A cached writer checks its high-water mark before appending; stale writers fail
 without truncating a newer history. SQLite observers run only after commit.
 
-Large JSON strings (including encoded image bytes) are stored once and referenced
-through an explicit JSON-pointer manifest. User JSON objects cannot masquerade as
-references; numbers keep exact decimal precision. Deduplication and decompression
-are transparent to replay and the in-memory, I/O-free context builder. Bash's
-artifact-reference rendering mode is persisted with each new operation; migration
-never rewrites historical result text, preserving saved compaction prefix hashes.
-This is lossless compression, not conversation summarization.
+JSON artifact format 2 preserves **every input byte**, including object order,
+whitespace, number spelling and escape sequences. Its envelope contains exact
+literal spans and references to large encoded string tokens (including encoded
+image bytes). User JSON is never re-encoded as a map and cannot masquerade as an
+internal reference. Deduplication and decompression are transparent to the
+in-memory, I/O-free context builder. Bash's artifact-reference rendering mode is
+persisted with each operation so replay never changes historical result text.
+
+The initial format-1 writer normalized JSON object order. This was a bug: opaque
+provider JSON participates in the compaction prefix hash. The reader remains
+backward compatible. For old imports it restores the read view from an archived
+original journal only after verifying the import fingerprint and semantic equality
+of each affected record. Newer SQLite events are not replaced and no history rows
+are rewritten. Without an original, the lost byte representation cannot be guessed.
+Chat can then ignore only a stale derived compaction, retain the full canonical
+transcript, and visibly warn. The summary is never applied without a matching hash;
+malformed records, corrupted archives, storage and audit failures remain fatal.
+Live compaction validation remains strict. Other hosts explicitly opt into replay
+fallback with `RecoverStaleCompactions` and `OnCompactionSkipped`.
+This is lossless storage compression, separate from conversation summarization.
 
 Artifacts consist of immutable 128 KiB chunks, compressed with zstd only when
 smaller, and checksummed with SHA-256. Range reads decompress only touched chunks.

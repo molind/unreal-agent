@@ -428,6 +428,16 @@ them. The current system/`AGENTS.md` instructions, complete original transcript,
 and capture files remain intact. Maintenance replies are not displayed as
 assistant answers, including during replay; progress and size changes are shown.
 
+Older SQLite builds normalized JSON object ordering, which could cause
+`context compaction prefix does not match saved history` on resume. Current builds
+preserve exact JSON bytes and recover old imported records from verified archived
+originals at read time, without rewriting history. If the exact original is not
+available, chat displays **History recovery**, ignores the incompatible saved
+summary and retains the full transcript. It may need fresh compaction after a
+provider overflow. It never applies an unverified summary or changes a saved hash.
+Corrupt archives, invalid records and diagnostic/storage failures are still errors.
+This is a history-replay issue, not a reason to renew provider credentials.
+
 A single oversized recent message or protected tool span may have no safe prefix
 to compress. In that case use `/new` with a concise handoff. Other harness hosts
 opt into recovery with `coordinator.Dependencies.RecoverContext`; a noninteractive

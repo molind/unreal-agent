@@ -305,7 +305,7 @@ type application struct {
 }
 
 func runtimeError(err error) error {
-	return fmt.Errorf("chat runtime failed; work stopped and history retained. Check provider/model configuration, connection, missing or expired credentials, and session storage. Renew credentials externally; no automatic retry: %w", err)
+	return fmt.Errorf("chat runtime failed; work stopped and history retained. See the cause below and the diagnostic log; no automatic retry: %w", err)
 }
 func (a *application) start() error {
 	if a.runtime != nil || a.id == "" {
@@ -319,6 +319,9 @@ func (a *application) start() error {
 	return a.logs.event("runtime", "started", a.id, "", nil)
 }
 func (a *application) event(e event) error {
+	if e.warning != "" {
+		return a.display.print("History recovery: %s\n", e.warning)
+	}
 	if e.context != nil {
 		oldID := a.display.contextStatus.ApprovalID
 		if oldID != "" && oldID != e.context.ApprovalID && a.display.ui != nil {
