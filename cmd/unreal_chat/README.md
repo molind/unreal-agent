@@ -306,12 +306,16 @@ noncooperating editors:** an external program ignoring locks can still race the
 last check. Atomic replacement does not preserve ACLs/xattrs or inode identity.
 
 Edit/Write show a unified diff after a durably observed successful operation.
-On color-capable terminals, removed lines have a red background and added lines
-have a green background, with contrasting text. Context/file/hunk headers remain
-neutral. The same highlighting applies to `diff` and `patch` Markdown code blocks.
-Each changed row resets its style before the newline; no padding is added to the
-copied text. `NO_COLOR` and plain/piped output keep uncolored text. This changes
-presentation only, not captured diffs or model context.
+On color-capable terminals, removed lines have a pale red background and added
+lines have a pale green background, with contrasting text. Deleted and inserted
+text within each change block gets a more saturated red or green background;
+unchanged fragments keep the pale row color. Very large replacements fall back
+to emphasizing the changed middle while retaining common prefixes and suffixes.
+Context/file/hunk headers remain neutral. The same highlighting applies to `diff`
+and `patch` Markdown code blocks. Each changed row resets its style before the
+newline; no padding is added to the copied text. `NO_COLOR` and plain/piped output
+keep uncolored text. This changes presentation only, not captured diffs or model
+context.
 Long previews are bounded; the full patch is an `artifact:HASH` in SQLite,
 or `<session-directory>/operations/<session-ID>/<operation-ID>/change.diff` in
 legacy JSONL mode. File lifecycle logs describe the action/path and capture

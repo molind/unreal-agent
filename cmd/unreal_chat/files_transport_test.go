@@ -121,11 +121,13 @@ func testTTYStructuredEdit(t *testing.T, color bool) {
 	cli.wait("STRUCTURED EDIT DONE")
 	if color {
 		cli.wait(" \x1b[32m✓\x1b[0m Edit: source.txt")
-		cli.wait("\x1b[97;41m-hello\x1b[0m\r\n\x1b[30;42m+world\x1b[0m")
+		// Pale row backgrounds, stronger changed spans, and a pale common 'o'.
+		cli.wait("\x1b[38;5;16;48;5;224m-\x1b[38;5;16;48;5;210mhell\x1b[38;5;16;48;5;224mo\x1b[0m\r\n" +
+			"\x1b[38;5;16;48;5;194m+\x1b[38;5;16;48;5;120mw\x1b[38;5;16;48;5;194mo\x1b[38;5;16;48;5;120mrld\x1b[0m")
 	} else {
 		cli.wait(" ✓ Edit: source.txt")
 		cli.wait("-hello\r\n+world")
-		if strings.Contains(cli.snapshot(), "\x1b[97;41m") || strings.Contains(cli.snapshot(), "\x1b[30;42m") {
+		if strings.Contains(cli.snapshot(), "\x1b[38;5;16;48;5;") {
 			t.Fatal("diff background ignored NO_COLOR")
 		}
 	}

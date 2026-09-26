@@ -198,20 +198,17 @@ func (v markdownView) code(source []byte, language, prefix string) string {
 	}
 	var out strings.Builder
 	out.WriteString(prefix + paint(v.color, "2", opening) + "\n")
-	var diff diffHighlighter
+	lines := strings.Split(strings.TrimSuffix(v.safe(string(source)), "\n"), "\n")
 	isDiff := strings.EqualFold(language, "diff") || strings.EqualFold(language, "patch")
-	for _, line := range strings.Split(strings.TrimSuffix(v.safe(string(source)), "\n"), "\n") {
+	if isDiff && v.color {
+		highlightDiff(lines)
+	}
+	for _, line := range lines {
 		// Code rows carry only source indentation, never a decorative gutter
 		// or the parent list/quote prefix. Keep nesting on the heading/footer
 		// so selecting the code itself does not copy UI characters. Tabs are
 		// expanded only in the view; canonical history is never modified.
-		style := ""
-		if isDiff {
-			style = diff.lineStyle(line)
-		}
-		// Reset before the newline: neither the next row nor the live prompt
-		// should inherit a diff background. Do not pad/reflow copied text.
-		out.WriteString(paint(v.color, style, strings.ReplaceAll(line, "\t", "    ")) + "\n")
+		out.WriteString(strings.ReplaceAll(line, "\t", "    ") + "\n")
 	}
 	out.WriteString(prefix + paint(v.color, "2", fence) + "\n\n")
 	return out.String()

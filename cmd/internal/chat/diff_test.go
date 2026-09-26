@@ -10,6 +10,135 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 )
 
+// Expected runs alternate between pale and saturated, starting with the sign.
+func diffTestRow(parts ...string) string {
+	base, strong := diffRemovedStyle, diffRemovedTextStyle
+	if parts[0][0] == '+' {
+		base, strong = diffAddedStyle, diffAddedTextStyle
+	}
+	var out strings.Builder
+	for i, part := range parts {
+		style := base
+		if i%2 == 1 {
+			style = strong
+		}
+		out.WriteString("\x1b[" + style + "m" + part)
+	}
+	return out.String() + "\x1b[0m"
+}
+
+func TestDiffHighlightsOnlyChangedText(t *testing.T) {
+	for _, tt := range []struct {
+		name, source string
+		want         []string
+	}{
+		{
+			name:   "replacement",
+			source: "-let n = 1;\n+let n = 20;",
+			want:   []string{diffTestRow("-let n = ", "1", ";"), diffTestRow("+let n = ", "20", ";")},
+		},
+		{
+			name:   "separate edits",
+			source: "-f(1, keep, 3)\n+f(2, keep, 4)",
+			want:   []string{diffTestRow("-f(", "1", ", keep, ", "3", ")"), diffTestRow("+f(", "2", ", keep, ", "4", ")")},
+		},
+		{
+			name:   "insertion",
+			source: "-name()\n+name(value)",
+			want:   []string{diffTestRow("-name()"), diffTestRow("+name(", "value", ")")},
+		},
+		{
+			name:   "deletion",
+			source: "-name(value)\n+name()",
+			want:   []string{diffTestRow("-name(", "value", ")"), diffTestRow("+name()")},
+		},
+		{
+			name:   "unicode",
+			source: "-ключ: дом 🐈\n+ключ: дым 🐕",
+			want:   []string{diffTestRow("-ключ: д", "о", "м ", "🐈"), diffTestRow("+ключ: д", "ы", "м ", "🐕")},
+		},
+		{
+			name:   "inserted row does not shift later matches",
+			source: "-alpha = 1\n-omega = 3\n+alpha = 2\n+NEW ROW\n+omega = 4",
+			want:   []string{diffTestRow("-alpha = ", "1"), diffTestRow("-omega = ", "3"), diffTestRow("+alpha = ", "2"), diffTestRow("+", "NEW ROW"), diffTestRow("+omega = ", "4")},
+		},
+		{
+			name:   "unchanged row inside a replacement",
+			source: "-a = 1\n-unchanged\n-z = 3\n+a = 2\n+unchanged\n+z = 4",
+			want:   []string{diffTestRow("-a = ", "1"), diffTestRow("-unchanged"), diffTestRow("-z = ", "3"), diffTestRow("+a = ", "2"), diffTestRow("+unchanged"), diffTestRow("+z = ", "4")},
+		},
+		{
+			name:   "standalone removal",
+			source: "-gone",
+			want:   []string{diffTestRow("-", "gone")},
+		},
+		{
+			name:   "standalone addition",
+			source: "+new",
+			want:   []string{diffTestRow("+", "new")},
+		},
+		{
+			name:   "empty rows",
+			source: "-\n+",
+			want:   []string{diffTestRow("-"), diffTestRow("+")},
+		},
+		{
+			name:   "context separates blocks",
+			source: "-same\n context\n+same",
+			want:   []string{diffTestRow("-", "same"), " context", diffTestRow("+", "same")},
+		},
+		{
+			name:   "hunks separate blocks",
+			source: "@@ -1 +1,0 @@\n-same\n@@ -3,0 +3 @@\n+same",
+			want:   []string{"@@ -1 +1,0 @@", diffTestRow("-", "same"), "@@ -3,0 +3 @@", diffTestRow("+", "same")},
+		},
+		{
+			name:   "no newline annotations do not separate a replacement",
+			source: "-a = 1\n\\ No newline at end of file\n+a = 2\n\\ No newline at end of file",
+			want:   []string{diffTestRow("-a = ", "1"), `\ No newline at end of file`, diffTestRow("+a = ", "2"), `\ No newline at end of file`},
+		},
+		{
+			name:   "successive headerless replacements",
+			source: "-abc\n+def\n-def\n+ghi",
+			want:   []string{diffTestRow("-", "abc"), diffTestRow("+", "def"), diffTestRow("-", "def"), diffTestRow("+", "ghi")},
+		},
+		{
+			name:   "whitespace is a real edit",
+			source: "-\tvalue \n+    value",
+			want:   []string{diffTestRow("-", "\t", "value", " "), diffTestRow("+", "    ", "value")},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := strings.Split(tt.source, "\n")
+			highlightDiff(lines)
+			got, want := strings.Join(lines, "\n"), strings.Join(tt.want, "\n")
+			if got != want {
+				t.Fatalf("highlighting:\n%q\nwant:\n%q", got, want)
+			}
+			if plain := terminalStyle.ReplaceAllString(got, ""); plain != tt.source {
+				t.Fatalf("changed diff text: %q", plain)
+			}
+		})
+	}
+}
+
+func TestDiffLargeReplacementIsBounded(t *testing.T) {
+	// Well beyond the LCS budget. Common edges should still stay pale.
+	before, after := strings.Repeat("a", 10000), strings.Repeat("b", 10000)
+	lines := []string{"-prefix " + before + " suffix", "+prefix " + after + " suffix"}
+	highlightDiff(lines)
+	if lines[0] != diffTestRow("-prefix ", before, " suffix") || lines[1] != diffTestRow("+prefix ", after, " suffix") {
+		t.Fatal("large replacement did not preserve common edges")
+	}
+	// A tiny edit on very long rows should not consume the quadratic budget.
+	edge := strings.Repeat("unchanged ", 10000)
+	lines = []string{"-" + edge + "1" + edge, "+" + edge + "2" + edge}
+	highlightDiff(lines)
+	if lines[0] != diffTestRow("-"+edge, "1", edge) || lines[1] != diffTestRow("+"+edge, "2", edge) {
+		t.Fatal("long common edges obscured the small change")
+	}
+}
+
 func TestDiffBackgroundsPreserveTextAndLeaveHeadersNeutral(t *testing.T) {
 	diff := "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,4 +1,4 @@\n kept\n-old\n--- removed comment\n-\n+new\n+++ added comment\n+\n" +
 		"--- a/second\n+++ b/second\n@@ -10 +10 @@ more context\n-last\n+last\n\\ No newline at end of file\n" +
@@ -24,14 +153,17 @@ func TestDiffBackgroundsPreserveTextAndLeaveHeadersNeutral(t *testing.T) {
 				if plain := terminalStyle.ReplaceAllString(got, ""); plain != want {
 					t.Fatalf("changed copied diff:\n%q\nwant:\n%q", plain, want)
 				}
-				for _, line := range []string{"-old", "--- removed comment", "-", "-last"} {
-					if !strings.Contains(got, paint(color, diffRemovedStyle, line)+"\n") {
-						t.Errorf("missing red background/reset on %q", line)
+				for _, row := range strings.Split(got, "\n") {
+					plain := terminalStyle.ReplaceAllString(row, "")
+					style := ""
+					switch plain {
+					case "-old", "--- removed comment", "-", "-last":
+						style = diffRemovedStyle
+					case "+new", "+++ added comment", "+", "+last", "+created":
+						style = diffAddedStyle
 					}
-				}
-				for _, line := range []string{"+new", "+++ added comment", "+", "+last", "+created"} {
-					if !strings.Contains(got, paint(color, diffAddedStyle, line)+"\n") {
-						t.Errorf("missing green background/reset on %q", line)
+					if color && style != "" && (!strings.HasPrefix(row, "\x1b["+style+"m") || !strings.HasSuffix(row, "\x1b[0m")) {
+						t.Errorf("missing pale background/reset on %q", plain)
 					}
 				}
 				for _, line := range []string{"--- a/f", "+++ b/f", "--- a/second", "+++ b/second", "--- /dev/null", "+++ b/new", " kept", "@@ -1,4 +1,4 @@", "\\ No newline at end of file"} {
@@ -50,11 +182,11 @@ func TestDiffBackgroundsPreserveTextAndLeaveHeadersNeutral(t *testing.T) {
 func TestMarkdownDiffFragmentsOnlyColorDiffBlocks(t *testing.T) {
 	d := newDisplay(&bytes.Buffer{}, func(string) string { return "" })
 	d.ui, d.color = &terminalUI{width: 24}, true
-	fragment := "-\tбыло\n+\tстала\n"
-	for _, language := range []string{"diff", "go", ""} {
+	fragment := "-\tлік = 1\n+\tлік = 2\n"
+	for _, language := range []string{"diff", "patch", "DIFF", "go", ""} {
 		got := d.markdown("```" + language + "\n" + fragment + "```\n\nAfter the diff.")
-		wantBackground := language == "diff"
-		if strings.Contains(got, "\x1b[97;41m-    было\x1b[0m\n") != wantBackground || strings.Contains(got, "\x1b[30;42m+    стала\x1b[0m\n") != wantBackground {
+		wantBackground := language == "diff" || language == "patch" || language == "DIFF"
+		if strings.Contains(got, diffTestRow("-    лік = ", "1")+"\n") != wantBackground || strings.Contains(got, diffTestRow("+    лік = ", "2")+"\n") != wantBackground {
 			t.Fatalf("incorrect background for language %q: %q", language, got)
 		}
 		if !strings.HasSuffix(got, "After the diff.\n") {
@@ -88,7 +220,7 @@ func TestDiffFormattingDoesNotChangePlainOutputOrCanonicalResult(t *testing.T) {
 	if err := d.fileChange(op); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "\x1b[97;41m-old\x1b[0m\n") || !strings.Contains(out.String(), "\x1b[30;42m+new\x1b[0m\n") {
+	if !strings.Contains(out.String(), diffTestRow("-", "old")+"\n") || !strings.Contains(out.String(), diffTestRow("+", "new")+"\n") {
 		t.Fatal("structured file diff did not use the shared background renderer")
 	}
 	decoded, err := operation.DecodeFileState(op)
