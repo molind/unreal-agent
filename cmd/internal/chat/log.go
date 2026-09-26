@@ -62,6 +62,19 @@ func openLogs(directory string, safe func(string) string) (*logs, error) {
 	}
 	return &logs{directory: directory, diagnostic: f.Name(), file: f, safe: safe, commands: make(map[string]logRecord)}, nil
 }
+
+// Diagnostic paths are available on demand, not in every startup/session banner.
+func (a *application) logLocations() error {
+	if a.logs == nil {
+		return nil
+	}
+	commandLogs := filepath.Join(a.logs.directory, "commands")
+	if a.logs.database != nil {
+		commandLogs = a.logs.database.Path + " (diagnostics table; use unreal-storage logs)"
+	}
+	return a.display.print("Command logs: %s\nDiagnostic log: %s\n", commandLogs, a.logs.diagnostic)
+}
+
 func (l *logs) write(f *os.File, r logRecord) error {
 	r.Time = time.Now().UTC()
 	r.Session = session.ID(l.safe(string(r.Session)))

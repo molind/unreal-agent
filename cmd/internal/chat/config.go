@@ -59,7 +59,7 @@ Original history stays on disk; recent input and active call/result pairs stay i
 A context/summary failure stops work but keeps the chat open for /new or /resume.
 A quiet model/workspace row separates the editable prompt from the transcript.
 NO_COLOR disables styling, not editing/layout. Pipes remain plain Markdown.
-Command and diagnostic log paths are shown at startup and /status.
+Command and diagnostic log paths are available in /status.
 Startup and /new stay UNSAVED until the first actual user message.
 /resume opens a recent-first chooser: Up/Down move, Enter resumes, Esc cancels.
 Opening/canceling does not stop work. Ctrl-C in the chooser stops active work

@@ -365,8 +365,13 @@ A bounded background reader handles pings while local tools run. Close/cancel
 joins it; a stopped request never continues via hidden HTTP fallback. An idle
 closed connection is reset before new work. Explicit `previous_response_not_found`
 or connection-expiration errors **before generation** allow one full resync on a
-new connection. Ambiguous disconnects/partial generation are surfaced rather than
-blindly resubmitted; a later authorized request can reconnect from local history.
+new connection. A `ServiceRestart` (1012) close before any generation is observed
+also permits one full resync, after a short cancelable pause. Recovery discards
+connection-scoped response IDs and never replays already completed local tools.
+A repeated restart or a restart after generation has begun stops work but keeps
+the chat open, with history and diagnostics retained; send a new message to
+continue. Partial output is not committed or executed. Ambiguous disconnects are
+not blindly resubmitted, and authentication/policy errors are not hidden as restarts.
 Context-limit errors still reach the compaction/approval policy unchanged.
 
 Auto falls back to HTTP only for an explicitly unsupported upgrade (404/405/426/
@@ -592,12 +597,14 @@ search and single-session SQLite exports are future work. See the
 
 ## Local logs and diagnostics
 
-With SQLite, startup and `/status` show the database and `diagnostics` table.
+Startup shows only the session, workspace and selected model settings, not log
+paths or a context-recovery policy banner. Logs are still recorded normally.
+With SQLite, `/status` shows the database and `diagnostics` table.
 Use `unreal-storage logs [SESSION_ID]` to export redacted JSONL. Lifecycle records
 retain command, timing, exit status and artifact references, not duplicate output.
 Failures before the database opens remain stderr diagnostics.
 
-With `-storage-format jsonl`, startup and `/status` show both legacy locations,
+With `-storage-format jsonl`, `/status` shows both legacy locations,
 relative to the selected session storage (so `-session-directory` relocates logs):
 
 - `<session-directory>/logs/commands/<session-ID>/<operation-ID>.jsonl`:
@@ -659,8 +666,10 @@ failures before log storage can be opened may only have stderr diagnostics.
   desired answer, then send `/exit`. For a single prompt with wait-until-idle
   JSONL output, use `unreal-agent-runner` instead.
 - Ordinary provider failures stop work and exit with a sanitized diagnostic rather than
-  retrying indefinitely. Context-limit and compaction failures instead keep the
-  chat open after stopping work (see rolling context management). Restart with `-session ID` after correcting settings.
+  retrying indefinitely. A provider `ServiceRestart`, context-limit or compaction
+  failure instead keeps the chat open after stopping work. A service restart gets
+  at most one pre-generation reconnect; otherwise a new user message is required.
+  Restart with `-session ID` after correcting settings for other provider failures.
   Token-shaped redaction is defense in depth, not a secret-detection guarantee.
 - No unlimited context, exact tokenizer, streaming text, OAuth refresh,
   forks, IDE integration, or permission modes. Compaction retains a recent tail;

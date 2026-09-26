@@ -189,14 +189,21 @@ func (a *adapter) respondWebsocket(ctx context.Context, body []byte, key string)
 		}
 		responseBody, exchangeErr := w.exchange(ctx, wire)
 		if exchangeErr != nil {
-			var apiErr *APIError
-			// Missing references / expired connections are explicit non-generation
-			// failures. Retry full on a new connection ONCE, never blindly loop.
-			var failure *websocketFailure
-			recoverable := errors.As(exchangeErr, &failure) && failure.beforeGeneration && errors.As(exchangeErr, &apiErr) && (apiErr.Code == "previous_response_not_found" || apiErr.Code == "websocket_connection_limit_reached")
 			w.reset()
 			incremental = false
-			if recoverable && recovery == 0 && ctx.Err() == nil {
+			if err := ctx.Err(); err != nil {
+				return llm.Response{}, err
+			}
+			// Recover only explicit reference/connection failures or a service
+			// restart before any generation was observed. Re-send the canonical
+			// full request ONCE; never reuse a connection-scoped response ID or
+			// replay a partial generation, even with a larger max-attempts value.
+			if recoverableWebsocketFailure(exchangeErr) && recovery == 0 {
+				if websocket.CloseStatus(exchangeErr) == websocket.StatusServiceRestart {
+					if err := waitWebsocketRestart(ctx); err != nil {
+						return llm.Response{}, err
+					}
+				}
 				continue
 			}
 			return llm.Response{}, exchangeErr
@@ -244,9 +251,33 @@ func (a *adapter) respondWebsocket(ctx context.Context, body []byte, key string)
 	return llm.Response{}, errors.New("websocket continuation recovery exhausted")
 }
 
+func recoverableWebsocketFailure(err error) bool {
+	var failure *websocketFailure
+	if !errors.As(err, &failure) || !failure.beforeGeneration {
+		return false
+	}
+	if websocket.CloseStatus(err) == websocket.StatusServiceRestart {
+		return true
+	}
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && (apiErr.Code == "previous_response_not_found" || apiErr.Code == "websocket_connection_limit_reached")
+}
+
+func waitWebsocketRestart(ctx context.Context) error {
+	// Give a restarting service a short, cancelable pause, not a hot retry loop.
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ctx.Err()
+	}
+}
+
 func (w *websocketSession) exchange(ctx context.Context, body []byte) ([]byte, error) {
 	if err := w.conn.Write(ctx, websocket.MessageText, body); err != nil {
-		return nil, err
+		return nil, &websocketFailure{error: err, beforeGeneration: true}
 	}
 	var state responseState
 	received := 0
@@ -263,7 +294,7 @@ func (w *websocketSession) exchange(ctx context.Context, body []byte) ([]byte, e
 		cancel()
 		kind, data, err := frame.kind, frame.data, frame.err
 		if err != nil {
-			return nil, err
+			return nil, &websocketFailure{error: err, beforeGeneration: !begun}
 		}
 		if kind != websocket.MessageText {
 			return nil, errors.New("responses websocket returned a non-text message")

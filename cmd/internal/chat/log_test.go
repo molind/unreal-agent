@@ -42,6 +42,7 @@ func records(t *testing.T, path string) []logRecord {
 func TestCommandLogsLifecycleAndReplay(t *testing.T) {
 	workspace := t.TempDir()
 	c := launch(t, workspace, false)
+	c.send("/status")
 	c.wait("Diagnostic log:")
 	c.send("execute three commands")
 	call := c.call()

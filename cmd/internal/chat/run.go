@@ -238,7 +238,8 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 			}
 			a.runtime = nil
 			if err != nil {
-				if recoverableContextError(err) {
+				contextFailure := recoverableContextError(err)
+				if contextFailure || recoverableProviderRestart(err) {
 					if ui != nil && a.approvalMenuShown != "" {
 						if outputErr := ui.editor.CloseSelectionID(compactionMenuID(a.approvalMenuShown)); outputErr != nil {
 							return outputErr
@@ -248,7 +249,11 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 					d.generating = false
 					d.contextStatus.Compacting = false
 					d.contextStatus.ApprovalID = ""
-					if outputErr := d.print("Context work stopped: %v\nHistory retained. Use /new for a shorter conversation, /resume to switch, or a new message to retry compaction.\n", err); outputErr != nil {
+					message := "Provider restarted; work stopped. History retained. Send a new message to continue; /status has diagnostic log paths.\n"
+					if contextFailure {
+						message = fmt.Sprintf("Context work stopped: %v\nHistory retained. Use /new for a shorter conversation, /resume to switch, or a new message to retry compaction.\n", err)
+					}
+					if outputErr := d.print("%s", message); outputErr != nil {
 						return outputErr
 					}
 					if outputErr := d.tick(0); outputErr != nil {
@@ -424,7 +429,7 @@ func (a *application) stop() error {
 	a.display.contextStatus.Compacting = false
 	a.display.contextStatus.ApprovalID = ""
 	outputErr = errors.Join(outputErr, a.display.tick(0))
-	if err != nil && a.ctx.Err() == nil {
+	if err != nil && a.ctx.Err() == nil && !recoverableProviderRestart(err) {
 		return errors.Join(outputErr, runtimeError(err))
 	}
 	return errors.Join(outputErr, a.logs.event("runtime", "stopped", a.id, "", err))
@@ -434,12 +439,7 @@ func (a *application) announce() error {
 	if id == "" {
 		id = "(unsaved; first message saves)"
 	}
-	commandLogs := filepath.Join(a.logs.directory, "commands")
-	if a.logs.database != nil {
-		commandLogs = a.logs.database.Path + " (diagnostics table; use unreal-storage logs)"
-	}
-	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\nCommand logs: %s\nDiagnostic log: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort, commandLogs, a.logs.diagnostic)
-	text += "Context: recover on provider overflow; repeated compaction requires approval.\n"
+	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort)
 	if a.display.ui != nil {
 		return a.display.write("\n" + paint(a.display.color, "1", "  unreal chat") + "\n" + paint(a.display.color, "2", a.display.safe(text)) + "\n")
 	}
@@ -550,12 +550,18 @@ func (a *application) command(text string) (bool, error) {
 				if err := view.announce(); err != nil {
 					return err
 				}
-				return view.display.status()
+				if err := view.display.status(); err != nil {
+					return err
+				}
+			} else {
+				if err := view.display.status(); err != nil {
+					return err
+				}
+				if err := view.announce(); err != nil {
+					return err
+				}
 			}
-			if err := view.display.status(); err != nil {
-				return err
-			}
-			return view.announce()
+			return view.logLocations()
 		})
 	case "/sessions":
 		return false, a.report("Saved sessions", func(view *application) error { return view.listSessions() })
@@ -694,15 +700,23 @@ func (a *application) accept(l line) (bool, error) {
 	return false, boundary("output", a.display.working())
 }
 
-// Do not swallow a simultaneous storage/log/output failure just because another
-// branch of errors.Join contains a recoverable context failure.
 func recoverableContextError(err error) bool {
+	return recoverableRuntimeCause(err, func(cause error) bool {
+		_, ok := cause.(*contextbuilder.LimitError)
+		return ok
+	})
+}
+
+// Do not swallow a simultaneous storage/log/output failure just because another
+// branch of errors.Join contains a recoverable provider/context failure. Match
+// concrete causes only; the predicate must not traverse wrapped/joined errors.
+func recoverableRuntimeCause(err error, match func(error) bool) bool {
 	var diagnostic *diagnosticWriteError
 	if errors.As(err, &diagnostic) {
 		return false
 	}
 	for err != nil {
-		if _, ok := err.(*contextbuilder.LimitError); ok {
+		if match(err) {
 			return true
 		}
 		if joined, ok := err.(interface{ Unwrap() []error }); ok {
