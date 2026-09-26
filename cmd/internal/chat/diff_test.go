@@ -10,8 +10,12 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 )
 
-// Expected runs alternate between pale and saturated, starting with the sign.
+// Expected runs alternate between dark and bright, starting with the sign.
+// A wholly changed row is uniform, including its sign.
 func diffTestRow(parts ...string) string {
+	if len(parts) == 2 && len(parts[0]) == 1 {
+		parts = []string{parts[0] + parts[1]}
+	}
 	base, strong := diffRemovedStyle, diffRemovedTextStyle
 	if parts[0][0] == '+' {
 		base, strong = diffAddedStyle, diffAddedTextStyle
@@ -55,7 +59,7 @@ func TestDiffHighlightsOnlyChangedText(t *testing.T) {
 		{
 			name:   "unicode",
 			source: "-ключ: дом 🐈\n+ключ: дым 🐕",
-			want:   []string{diffTestRow("-ключ: д", "о", "м ", "🐈"), diffTestRow("+ключ: д", "ы", "м ", "🐕")},
+			want:   []string{diffTestRow("-ключ: ", "дом", " ", "🐈"), diffTestRow("+ключ: ", "дым", " ", "🐕")},
 		},
 		{
 			name:   "inserted row does not shift later matches",
@@ -123,7 +127,7 @@ func TestDiffHighlightsOnlyChangedText(t *testing.T) {
 }
 
 func TestDiffLargeReplacementIsBounded(t *testing.T) {
-	// Well beyond the LCS budget. Common edges should still stay pale.
+	// Long identifiers are single tokens; common edge tokens stay dark.
 	before, after := strings.Repeat("a", 10000), strings.Repeat("b", 10000)
 	lines := []string{"-prefix " + before + " suffix", "+prefix " + after + " suffix"}
 	highlightDiff(lines)
@@ -132,9 +136,9 @@ func TestDiffLargeReplacementIsBounded(t *testing.T) {
 	}
 	// A tiny edit on very long rows should not consume the quadratic budget.
 	edge := strings.Repeat("unchanged ", 10000)
-	lines = []string{"-" + edge + "1" + edge, "+" + edge + "2" + edge}
+	lines = []string{"-" + edge + "1 " + edge, "+" + edge + "2 " + edge}
 	highlightDiff(lines)
-	if lines[0] != diffTestRow("-"+edge, "1", edge) || lines[1] != diffTestRow("+"+edge, "2", edge) {
+	if lines[0] != diffTestRow("-"+edge, "1", " "+edge) || lines[1] != diffTestRow("+"+edge, "2", " "+edge) {
 		t.Fatal("long common edges obscured the small change")
 	}
 }
@@ -163,7 +167,7 @@ func TestDiffBackgroundsPreserveTextAndLeaveHeadersNeutral(t *testing.T) {
 						style = diffAddedStyle
 					}
 					if color && style != "" && (!strings.HasPrefix(row, "\x1b["+style+"m") || !strings.HasSuffix(row, "\x1b[0m")) {
-						t.Errorf("missing pale background/reset on %q", plain)
+						t.Errorf("missing dark background/reset on %q", plain)
 					}
 				}
 				for _, line := range []string{"--- a/f", "+++ b/f", "--- a/second", "+++ b/second", "--- /dev/null", "+++ b/new", " kept", "@@ -1,4 +1,4 @@", "\\ No newline at end of file"} {

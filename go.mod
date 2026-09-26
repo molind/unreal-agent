@@ -7,6 +7,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/klauspost/compress v1.20.0
 	github.com/oapi-codegen/runtime v1.6.0
+	github.com/rivo/uniseg v0.4.7
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/image v0.46.0
 	golang.org/x/sys v0.48.0

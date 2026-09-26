@@ -123,7 +123,7 @@ func TestCompactCommandSummary(t *testing.T) {
 }
 
 func FuzzMarkdownTerminalSafety(f *testing.F) {
-	for _, value := range []string{"**hello** `code`", "&#27;[2J", "> - [link](https://example.org)", "```go\n\tprintln(1)\n```", "Беларуская мова"} {
+	for _, value := range []string{"**hello** `code`", "&#27;[2J", "> - [link](https://example.org)", "```go\n\tprintln(1)\n```", "Беларуская мова", guruTable, "| A | B |\n|---|---:|\n| &#27;[2J | **one two three four** |", "```diff\n-old_name()\n+new_name()\n```"} {
 		f.Add(value)
 	}
 	f.Fuzz(func(t *testing.T, body string) {

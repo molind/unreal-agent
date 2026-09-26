@@ -66,9 +66,14 @@ Assistant messages display on completion, not token by token. Tool notices show
 command descriptions, not raw tool output or JSONL.
 On capable terminals replies use a neutral foreground and spaced conversation
 blocks. CommonMark headings, bold/italic emphasis, lists, quotes, visible links,
-and code blocks are rendered using the goldmark parser. Prose wraps at words
-(to at most 100 columns). Replies start at the left edge, without artificial
-leading spaces. Code rows have no decorative left border or list/quote prefix,
+and code blocks, plus GFM pipe tables, are rendered using the goldmark parser.
+Tables use aligned columns, word-wrapped cells, and terminal-cell widths for
+Unicode. If columns cannot fit without splitting words, rows become labeled
+records (`Header: value`); no cell text is clipped. Long identifiers/URLs remain
+intact and may wrap naturally, as in prose. Table layout remains available with
+`NO_COLOR` (without ANSI styling).
+Prose and tables wrap to at most 100 columns. Replies start at the left edge,
+without artificial leading spaces. Code rows have no decorative left border or list/quote prefix,
 so selecting them copies only the code's own indentation and text. Language
 headings and boundaries use ordinary Markdown fences: `` ```lang ``, code, then
 `` ``` ``. Fences are lengthened when needed for code that contains backticks.
@@ -306,11 +311,14 @@ noncooperating editors:** an external program ignoring locks can still race the
 last check. Atomic replacement does not preserve ACLs/xattrs or inode identity.
 
 Edit/Write show a unified diff after a durably observed successful operation.
-On color-capable terminals, removed lines have a pale red background and added
-lines have a pale green background, with contrasting text. Deleted and inserted
-text within each change block gets a more saturated red or green background;
-unchanged fragments keep the pale row color. Very large replacements fall back
-to emphasizing the changed middle while retaining common prefixes and suffixes.
+On color-capable terminals, removed lines have a dark red background and added
+lines have a dark green background, with light text. Whole added/deleted rows are
+uniformly colored, including their signs. Similar rows are paired before comparing
+whole words/identifiers, so inserted rows and coincidental matching letters do not
+fragment the highlighting. Changed tokens use a brighter red/green background
+and bold white text; unchanged fragments keep the dark row color and normal weight.
+Matching work is bounded: oversized blocks retain whole-row colors, and large
+intraline replacements retain common token prefixes/suffixes.
 Context/file/hunk headers remain neutral. The same highlighting applies to `diff`
 and `patch` Markdown code blocks. Each changed row resets its style before the
 newline; no padding is added to the copied text. `NO_COLOR` and plain/piped output
@@ -636,7 +644,7 @@ failures before log storage can be opened may only have stderr diagnostics.
   recovery behavior. Keep the same workspace when resuming custom storage.
 - Conversation editing stays scrollback-based; only report viewers use an alternate
   full-screen buffer. This is not a browser. The Markdown view supports core
-  CommonMark, not extensions such as pipe tables or interactive links. Code is
+  CommonMark and GFM pipe tables, but not interactive links. Code is
   not reflowed or syntax highlighted. The editor supports
   single-cell Unicode such as Belarusian; complex combining/emoji/wide-glyph
   cursor widths and terminal-specific reflow are limited by `x/term`.
@@ -673,7 +681,10 @@ async tools and notices, cancel/confirm, missing/corrupt choices, Ctrl-C/EOF,
 restored model context, and durable session counts. Unit tests cover recent
 ordering, duplicate titles, safe Cyrillic rendering and plain fallback. Markdown
 unit/fuzz tests cover redaction and terminal-control safety after entity decoding,
-prose wrapping, literal code and plain fallback. Paste tests cover short inline
+prose wrapping, literal code, GFM table alignment/wrapping/narrow-screen records,
+Unicode cell widths and plain fallback. PTY checks cover tables, the dark diff
+palette, `NO_COLOR`, and unchanged model context. Diff regressions cover whole-token
+edits, inserted rows, style resets and bounded matching. Paste tests cover short inline
 editing/history, both sides of the 160-character threshold, absolute paths,
 control-bearing blocks and whole-draft limits. Interrupt tests cover draft
 clearing without cancellation, model/tool stop, rapid clear/stop/exit sequences,

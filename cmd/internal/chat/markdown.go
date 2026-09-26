@@ -6,13 +6,16 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/rivo/uniseg"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	tableast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 )
 
-// Parse CommonMark with a maintained parser, but render only terminal text.
+// Parse CommonMark and GFM tables with a maintained parser, but render only terminal text.
 // No HTML renderer, OSC hyperlinks, external resources, or model-supplied ANSI
 // reach the terminal. Sanitize again after decoding Markdown entities/escapes.
 type markdownView struct {
@@ -22,9 +25,11 @@ type markdownView struct {
 	safe   func(string) string
 }
 
+var terminalMarkdown = goldmark.New(goldmark.WithExtensions(extension.Table))
+
 func (d *display) markdown(body string) string {
 	v := markdownView{source: []byte(d.safe(body)), width: min(100, d.columns()-1), color: d.color, safe: d.safe}
-	root := goldmark.DefaultParser().Parse(text.NewReader(v.source))
+	root := terminalMarkdown.Parser().Parse(text.NewReader(v.source))
 	return strings.TrimRight(v.blocks(root, ""), "\n") + "\n"
 }
 
@@ -38,7 +43,7 @@ func paint(color bool, style, value string) string {
 var terminalStyle = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func visibleLength(value string) int {
-	return utf8.RuneCountInString(terminalStyle.ReplaceAllString(value, ""))
+	return uniseg.StringWidth(terminalStyle.ReplaceAllString(value, ""))
 }
 
 // Wrap prose at words rather than clipping it. Long code/URL tokens remain
@@ -135,6 +140,8 @@ func (v markdownView) blocks(parent ast.Node, prefix string) string {
 	var out strings.Builder
 	for n := parent.FirstChild(); n != nil; n = n.NextSibling() {
 		switch node := n.(type) {
+		case *tableast.Table:
+			out.WriteString(v.table(node, prefix))
 		case *ast.Heading:
 			out.WriteString(wrapProse(v.inline(n, "1"), prefix, v.width) + "\n")
 		case *ast.Paragraph:

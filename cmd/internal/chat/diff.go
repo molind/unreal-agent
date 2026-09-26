@@ -6,14 +6,14 @@ import (
 	"strings"
 )
 
-// Fixed xterm palette colors keep both levels readable on light and dark themes:
-// pale backgrounds for changed rows, saturated backgrounds for changed text.
-// No padding or erase-line escapes: copying still yields just the original text.
+// Dark-theme xterm palette: subdued rows, brighter changed tokens in bold white.
+// Reset in the base style clears bold when leaving an emphasized span. No
+// padding or erase-line escapes: copying still yields just the original text.
 const (
-	diffRemovedStyle     = "38;5;16;48;5;224" // Black on pale red (#ffd7d7).
-	diffAddedStyle       = "38;5;16;48;5;194" // Black on pale green (#d7ffd7).
-	diffRemovedTextStyle = "38;5;16;48;5;210" // Black on red (#ff8787).
-	diffAddedTextStyle   = "38;5;16;48;5;120" // Black on green (#87ff87).
+	diffRemovedStyle     = "0;38;5;224;48;5;52"  // Pale red on dark red (#5f0000).
+	diffAddedStyle       = "0;38;5;194;48;5;22"  // Pale green on dark green (#005f00).
+	diffRemovedTextStyle = "1;38;5;231;48;5;124" // Bold white on red (#af0000).
+	diffAddedTextStyle   = "1;38;5;231;48;5;34"  // Bold white on green (#00af00).
 
 	// Rendering an arbitrary Markdown diff must not do unbounded quadratic
 	// work. Larger replacements retain common edges and highlight the middle.
@@ -96,36 +96,34 @@ func highlightDiff(lines []string) {
 }
 
 func highlightDiffBlock(lines, styles []string) {
-	var before, after []rune
+	var before, after []diffRow
 	for i, line := range lines {
 		switch styles[i] {
 		case diffRemovedStyle:
-			before = append(append(before, []rune(line[1:])...), '\n')
+			before = append(before, newDiffRow(i, line[1:]))
 		case diffAddedStyle:
-			after = append(append(after, []rune(line[1:])...), '\n')
+			after = append(after, newDiffRow(i, line[1:]))
 		}
 	}
-	removed, added := diffChangedRunes(before, after)
-	oldPos, newPos := 0, 0
-	for i, line := range lines {
-		switch styles[i] {
-		case diffRemovedStyle:
-			n := len([]rune(line[1:]))
-			lines[i] = paintDiffLine(line, removed[oldPos:oldPos+n], diffRemovedStyle, diffRemovedTextStyle)
-			oldPos += n + 1
-		case diffAddedStyle:
-			n := len([]rune(line[1:]))
-			lines[i] = paintDiffLine(line, added[newPos:newPos+n], diffAddedStyle, diffAddedTextStyle)
-			newPos += n + 1
-		}
+	budget := diffMaxCells
+	changes := make(map[int][]bool)
+	for _, pair := range diffRowPairs(before, after, &budget) {
+		a, b := before[pair[0]], after[pair[1]]
+		removed, added := diffChangedTokens(a.tokens, b.tokens, &budget)
+		changes[a.index], changes[b.index] = removed, added
+	}
+	for _, row := range before {
+		lines[row.index] = paintDiffLine(lines[row.index], row.tokens, changes[row.index], diffRemovedStyle, diffRemovedTextStyle)
+	}
+	for _, row := range after {
+		lines[row.index] = paintDiffLine(lines[row.index], row.tokens, changes[row.index], diffAddedStyle, diffAddedTextStyle)
 	}
 }
 
-// diffChangedRunes finds a bounded longest common subsequence. Working in runes
-// preserves UTF-8; retaining all common runs highlights separate edits without
-// also emphasizing the unchanged text between them. Newlines participate in the
-// comparison but the diff signs and no-newline annotations do not.
-func diffChangedRunes(before, after []rune) (removed, added []bool) {
+// Compare whole tokens only within paired rows. Common letters in otherwise
+// different identifiers must not produce a checkerboard of unchanged fragments.
+// The quadratic budget is shared with row matching for the entire change block.
+func diffChangedTokens(before, after []string, budget *int) (removed, added []bool) {
 	removed, added = make([]bool, len(before)), make([]bool, len(after))
 	start, oldEnd, newEnd := 0, len(before), len(after)
 	for start < oldEnd && start < newEnd && before[start] == after[start] {
@@ -142,11 +140,13 @@ func diffChangedRunes(before, after []rune) (removed, added []bool) {
 		added[i] = true
 	}
 	a, b := before[start:oldEnd], after[start:newEnd]
-	if len(a) == 0 || len(b) == 0 || len(a)+1 > diffMaxCells/(len(b)+1) {
+	if len(a) == 0 || len(b) == 0 || len(a)+1 > *budget/(len(b)+1) {
 		return removed, added
 	}
 	width := len(b) + 1
-	lcs := make([]uint32, (len(a)+1)*width)
+	cells := (len(a) + 1) * width
+	*budget -= cells
+	lcs := make([]uint32, cells)
 	for i := len(a) - 1; i >= 0; i-- {
 		for j := len(b) - 1; j >= 0; j-- {
 			if a[i] == b[j] {
@@ -170,12 +170,17 @@ func diffChangedRunes(before, after []rune) (removed, added []bool) {
 	return removed, added
 }
 
-func paintDiffLine(line string, changed []bool, base, strong string) string {
+func paintDiffLine(line string, tokens []string, changed []bool, base, strong string) string {
+	// An unpaired (wholly added/deleted) row has one uniform background,
+	// including the sign. Do not invent intraline matches with another row.
+	if changed == nil {
+		return paint(true, base, line)
+	}
 	var out strings.Builder
 	out.WriteString("\x1b[" + base + "m")
-	out.WriteByte(line[0]) // The +/- marker always keeps the pale row background.
+	out.WriteByte(line[0])
 	active := false
-	for i, r := range []rune(line[1:]) {
+	for i, token := range tokens {
 		if changed[i] != active {
 			style := base
 			if changed[i] {
@@ -184,7 +189,7 @@ func paintDiffLine(line string, changed []bool, base, strong string) string {
 			out.WriteString("\x1b[" + style + "m")
 			active = changed[i]
 		}
-		out.WriteRune(r)
+		out.WriteString(token)
 	}
 	// Reset before the newline so following rows and the prompt stay neutral.
 	out.WriteString("\x1b[0m")
