@@ -239,7 +239,7 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 			a.runtime = nil
 			if err != nil {
 				contextFailure := recoverableContextError(err)
-				if contextFailure || recoverableProviderRestart(err) {
+				if contextFailure || recoverableProviderFailure(err) {
 					if ui != nil && a.approvalMenuShown != "" {
 						if outputErr := ui.editor.CloseSelectionID(compactionMenuID(a.approvalMenuShown)); outputErr != nil {
 							return outputErr
@@ -249,7 +249,11 @@ func Run(ctx context.Context, args []string, getenv func(string) string, input i
 					d.generating = false
 					d.contextStatus.Compacting = false
 					d.contextStatus.ApprovalID = ""
-					message := "Provider restarted; work stopped. History retained. Send a new message to continue; /status has diagnostic log paths.\n"
+					reason := "Provider temporarily unavailable"
+					if recoverableProviderRestart(err) {
+						reason = "Provider restarted"
+					}
+					message := reason + "; work stopped. History retained. Send a new message to continue; /status has diagnostic log paths.\n"
 					if contextFailure {
 						message = fmt.Sprintf("Context work stopped: %v\nHistory retained. Use /new for a shorter conversation, /resume to switch, or a new message to retry compaction.\n", err)
 					}
@@ -429,7 +433,7 @@ func (a *application) stop() error {
 	a.display.contextStatus.Compacting = false
 	a.display.contextStatus.ApprovalID = ""
 	outputErr = errors.Join(outputErr, a.display.tick(0))
-	if err != nil && a.ctx.Err() == nil && !recoverableProviderRestart(err) {
+	if err != nil && a.ctx.Err() == nil && !recoverableProviderFailure(err) {
 		return errors.Join(outputErr, runtimeError(err))
 	}
 	return errors.Join(outputErr, a.logs.event("runtime", "stopped", a.id, "", err))
@@ -708,8 +712,8 @@ func recoverableContextError(err error) bool {
 }
 
 // Do not swallow a simultaneous storage/log/output failure just because another
-// branch of errors.Join contains a recoverable provider/context failure. Match
-// concrete causes only; the predicate must not traverse wrapped/joined errors.
+// branch of errors.Join contains a recoverable provider/context failure. The
+// predicate must also fail closed when traversing joined independent errors.
 func recoverableRuntimeCause(err error, match func(error) bool) bool {
 	var diagnostic *diagnosticWriteError
 	if errors.As(err, &diagnostic) {

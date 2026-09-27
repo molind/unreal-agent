@@ -20,6 +20,9 @@ type PrimitiveEvent struct {
 
 type PrimitiveFailureResult struct {
 	Error string
+	// Cause preserves in-process transport error identity for typed retry
+	// classification. It is never serialized into logs or event payloads.
+	Cause error `json:"-"`
 }
 
 func primitiveFailure(

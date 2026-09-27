@@ -126,7 +126,7 @@ func TestResponsesTerminalStatuses(t *testing.T) {
 	}
 }
 
-func TestResponsesStreamRetryDiscardsPartialAttempt(t *testing.T) {
+func TestResponsesStreamDoesNotRetryPartialGeneration(t *testing.T) {
 	for _, disconnect := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disconnect=%t", disconnect), func(t *testing.T) {
 			t.Parallel()
@@ -157,14 +157,8 @@ func TestResponsesStreamRetryDiscardsPartialAttempt(t *testing.T) {
 			defer server.Close()
 			adapter := newTestAdapterWithConfig(t, Config{Endpoint: server.URL + "/responses?tenant=1", MaxAttempts: new(2)})
 			got, err := adapter.Respond(t.Context(), validRequest(), llm.RequestOptions{})
-			if err != nil || attempts.Load() != 2 || got.ID != "new" || len(got.Output) != 1 {
-				t.Fatalf("attempts=%d response=%#v error=%v", attempts.Load(), got, err)
-			}
-			if got.Output[0].Data.(llm.Message).Text != "fallback" {
-				t.Fatal("retried generation retained the old tool call")
-			}
-			if first, second := <-bodies, <-bodies; first != second {
-				t.Fatal("retry changed request body")
+			if err == nil || attempts.Load() != 1 || len(got.Output) != 0 || !IsTransientError(err) {
+				t.Fatalf("partial generation was retried or escaped: attempts=%d response=%#v error=%v", attempts.Load(), got, err)
 			}
 		})
 	}

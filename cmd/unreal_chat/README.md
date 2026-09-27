@@ -48,7 +48,7 @@ but is not used by Codex. Ollama does not need a key.
 | `-reasoning-effort` | `UNREAL_HARNESS_LLM_REASONING_EFFORT` / `xhigh` |
 | `-base-url` | `UNREAL_HARNESS_LLM_BASE_URL` / adapter default |
 | `-transport auto\|websocket\|http` | `UNREAL_HARNESS_LLM_TRANSPORT`; default auto on first-party OpenAI/Codex, HTTP on custom endpoints |
-| `-max-attempts` | `UNREAL_HARNESS_LLM_MAX_ATTEMPTS` / **1** |
+| `-max-attempts` | `UNREAL_HARNESS_LLM_MAX_ATTEMPTS` / **3** |
 | `-session ID` | Resume an existing session; missing IDs are errors |
 | `-session-directory DIR` | XDG workspace state directory (see below); relative overrides are workspace-relative |
 | `-storage-format sqlite\|jsonl` | `sqlite`; `jsonl` retains the old workspace-local layout |
@@ -368,11 +368,22 @@ or connection-expiration errors **before generation** allow one full resync on a
 new connection. A `ServiceRestart` (1012) close before any generation is observed
 also permits one full resync, after a short cancelable pause. Recovery discards
 connection-scoped response IDs and never replays already completed local tools.
-A repeated restart or a restart after generation has begun stops work but keeps
-the chat open, with history and diagnostics retained; send a new message to
-continue. Partial output is not committed or executed. Ambiguous disconnects are
-not blindly resubmitted, and authentication/policy errors are not hidden as restarts.
-Context-limit errors still reach the compaction/approval policy unchanged.
+HTTP and WebSocket share a temporary-failure classifier: server errors, overload,
+rate limits, transient HTTP statuses and typed transport interruptions keep the
+chat usable. Before generation is observed, safe requests use up to **3 total
+attempts** by default, with exponential backoff/jitter and bounded `Retry-After`
+hints. `-max-attempts 1` disables ordinary retries; the one protocol resync above
+remains available. Handshake/API failures and resync share an attempt budget,
+rather than multiplying retries. Ctrl-C, `/stop`, shutdown and cancellation abort
+backoff without another request.
+
+After exhaustion, a partial generation or an ambiguous WebSocket disconnect,
+work stops but the chat stays open with history and draft retained. Send a new
+message to continue. Partial output is not committed or executed, and completed
+local tools are not replayed. Full provider causes/request IDs stay in diagnostics.
+Authentication, billing/quota, permission and policy errors are not retried or
+hidden as temporary failures; unknown in-band errors fail closed. Context-limit
+errors still reach the compaction/approval policy unchanged.
 
 Auto falls back to HTTP only for an explicitly unsupported upgrade (404/405/426/
 501), before sending generation. It does not downgrade on authentication, quota,
@@ -665,11 +676,12 @@ failures before log storage can be opened may only have stderr diagnostics.
   **not** waits for an answer; scripted callers must keep stdin open until the
   desired answer, then send `/exit`. For a single prompt with wait-until-idle
   JSONL output, use `unreal-agent-runner` instead.
-- Ordinary provider failures stop work and exit with a sanitized diagnostic rather than
-  retrying indefinitely. A provider `ServiceRestart`, context-limit or compaction
-  failure instead keeps the chat open after stopping work. A service restart gets
-  at most one pre-generation reconnect; otherwise a new user message is required.
-  Restart with `-session ID` after correcting settings for other provider failures.
+- Temporary provider failures stop work but keep the chat open after bounded safe
+  retries (default 3 attempts), or immediately if generation has already begun.
+  Continuing then requires a new user message. Context-limit/compaction failures
+  also retain the chat. Permanent/unknown provider errors and local storage/log/
+  output failures still surface as fatal diagnostics; correct the cause and use
+  `-session ID` to resume. No indefinite retries or replay of completed tools.
   Token-shaped redaction is defense in depth, not a secret-detection guarantee.
 - No unlimited context, exact tokenizer, streaming text, OAuth refresh,
   forks, IDE integration, or permission modes. Compaction retains a recent tail;

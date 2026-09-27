@@ -14,7 +14,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/llm"
 )
 
-func TestExchangeRestartsFailedGeneration(t *testing.T) {
+func TestExchangeRetriesRejectedRequest(t *testing.T) {
 	for _, kind := range []string{"error", "response.failed"} {
 		for _, code := range []string{"rate_limit_exceeded", "server_error", "server_is_overloaded", "slow_down"} {
 			t.Run(kind+"/"+code, func(t *testing.T) {
@@ -45,8 +45,6 @@ func TestExchangeRestartsFailedGeneration(t *testing.T) {
 					w.Header().Set("Content-Type", "text/event-stream")
 					if n == 1 {
 						w.Header().Set("Retry-After", "1")
-						_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"old\"},\"sequence_number\":0}\n\n")
-						_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":%s,\"sequence_number\":7}\n\n", fallbackCall)
 						_, _ = io.WriteString(w, retryErrorEvent(kind, code, "temporary failure"))
 						return
 					}

@@ -128,7 +128,8 @@ func (a *adapter) respondWebsocket(ctx context.Context, body []byte, key string)
 	if w.conn != nil && !incremental {
 		w.reset()
 	}
-	for recovery := 0; recovery < 2; recovery++ {
+	resynchronized := false
+	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			w.reset()
 			return llm.Response{}, err
@@ -150,18 +151,30 @@ func (a *adapter) respondWebsocket(ctx context.Context, body []byte, key string)
 				if ctx.Err() != nil {
 					return llm.Response{}, ctx.Err()
 				}
+				failure := &websocketFailure{error: &providerTransportError{fmt.Errorf("connect responses websocket: %w", dialErr)}, beforeGeneration: true, beforeSend: true}
+				var retryHeaders http.Header
 				if response != nil {
 					data, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 					_ = response.Body.Close()
+					retryHeaders = response.Header
 					status := response.StatusCode
 					if a.transport == TransportAuto && (status == 404 || status == 405 || status == 426 || status == 501) {
 						w.disabled = true
 						w.reset()
-						return a.respondHTTP(ctx, body, key, "websocket unsupported")
+						fallback := *a
+						fallback.maxAttempts = max(1, a.maxAttempts-attempt+1)
+						return fallback.respondHTTP(ctx, body, key, "websocket unsupported")
 					}
-					return llm.Response{}, providerError(status, data)
+					failure.error = providerError(status, data)
 				}
-				return llm.Response{}, fmt.Errorf("connect responses websocket: %w", dialErr)
+				retry, waitErr := a.retryWebsocketFailure(ctx, failure, retryHeaders, attempt, &resynchronized)
+				if waitErr != nil {
+					return llm.Response{}, waitErr
+				}
+				if retry {
+					continue
+				}
+				return llm.Response{}, failure
 			}
 			conn.SetReadLimit(maxSSEFrameBytes)
 			w.startReader(conn)
@@ -194,17 +207,12 @@ func (a *adapter) respondWebsocket(ctx context.Context, body []byte, key string)
 			if err := ctx.Err(); err != nil {
 				return llm.Response{}, err
 			}
-			// Recover only explicit reference/connection failures or a service
-			// restart before any generation was observed. Re-send the canonical
-			// full request ONCE; never reuse a connection-scoped response ID or
-			// replay a partial generation, even with a larger max-attempts value.
-			if recoverableWebsocketFailure(exchangeErr) && recovery == 0 {
-				if websocket.CloseStatus(exchangeErr) == websocket.StatusServiceRestart {
-					if err := waitWebsocketRestart(ctx); err != nil {
-						return llm.Response{}, err
-					}
-				}
-				continue
+			retry, waitErr := a.retryWebsocketFailure(ctx, exchangeErr, nil, attempt, &resynchronized)
+			if waitErr != nil {
+				return llm.Response{}, waitErr
+			}
+			if retry {
+				continue // New connection, canonical full input, no stale response ID.
 			}
 			return llm.Response{}, exchangeErr
 		}
@@ -248,7 +256,6 @@ func (a *adapter) respondWebsocket(ctx context.Context, body []byte, key string)
 		}
 		return response, nil
 	}
-	return llm.Response{}, errors.New("websocket continuation recovery exhausted")
 }
 
 func recoverableWebsocketFailure(err error) bool {
@@ -281,7 +288,6 @@ func (w *websocketSession) exchange(ctx context.Context, body []byte) ([]byte, e
 	}
 	var state responseState
 	received := 0
-	begun := false
 	for {
 		idle, cancel := context.WithTimeout(ctx, modelResponseIdleTimeout)
 		var frame websocketFrame
@@ -289,12 +295,12 @@ func (w *websocketSession) exchange(ctx context.Context, body []byte) ([]byte, e
 		case frame = <-w.incoming:
 		case <-idle.Done():
 			cancel()
-			return nil, idle.Err()
+			return nil, &websocketFailure{error: &providerTransportError{idle.Err()}, beforeGeneration: !state.begun}
 		}
 		cancel()
 		kind, data, err := frame.kind, frame.data, frame.err
 		if err != nil {
-			return nil, &websocketFailure{error: err, beforeGeneration: !begun}
+			return nil, &websocketFailure{error: err, beforeGeneration: !state.begun}
 		}
 		if kind != websocket.MessageText {
 			return nil, errors.New("responses websocket returned a non-text message")
@@ -303,22 +309,15 @@ func (w *websocketSession) exchange(ctx context.Context, body []byte) ([]byte, e
 		if received > maxSSEFrameBytes {
 			return nil, errors.New("responses websocket response exceeds size limit")
 		}
-		var event struct {
-			Type string `json:"type"`
-		}
-		_ = json.Unmarshal(data, &event)
-		if strings.HasPrefix(event.Type, "response.") && event.Type != "response.failed" {
-			begun = true
-		}
 		if err := state.observe(data); err != nil {
-			return nil, &websocketFailure{error: err, beforeGeneration: !begun}
+			return nil, &websocketFailure{error: err, beforeGeneration: !state.begun}
 		}
 		if state.err != nil {
-			return nil, &websocketFailure{error: state.err, beforeGeneration: !begun}
+			return nil, &websocketFailure{error: state.err, beforeGeneration: !state.begun}
 		}
 		if state.terminal {
 			if state.failure != nil {
-				return nil, &websocketFailure{error: state.failure, beforeGeneration: !begun}
+				return nil, &websocketFailure{error: state.failure, beforeGeneration: !state.begun}
 			}
 			return state.unwrap()
 		}
@@ -345,6 +344,7 @@ type websocketFrame struct {
 type websocketFailure struct {
 	error
 	beforeGeneration bool
+	beforeSend       bool // Handshake failed before response.create was sent.
 }
 
 func (e *websocketFailure) Unwrap() error { return e.error }

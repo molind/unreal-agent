@@ -609,7 +609,9 @@ func remoteAttemptFailure(request RemoteRequest, attempt int, err error) error {
 }
 
 func remoteFailure(request RemoteRequest, err error) PrimitiveEvent {
-	return primitiveFailure(request.Source, request.CorrelationID, err)
+	event := primitiveFailure(request.Source, request.CorrelationID, err)
+	event.Result = PrimitiveFailureResult{Error: err.Error(), Cause: err}
+	return event
 }
 
 func remoteCanceled(request RemoteRequest) PrimitiveEvent {

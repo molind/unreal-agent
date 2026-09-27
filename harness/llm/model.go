@@ -149,7 +149,12 @@ type Usage struct {
 type Failure struct {
 	Code    string
 	Message string
+	// Cause retains provider-specific classification in process, without changing
+	// canonical serialized responses. Adapters may leave it nil.
+	Cause error `json:"-"`
 }
+
+func (f *Failure) Unwrap() error { return f.Cause }
 
 func (f *Failure) Error() string {
 	if f.Code == "" {

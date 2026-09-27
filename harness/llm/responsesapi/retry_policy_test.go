@@ -23,7 +23,7 @@ func TestRetryableResponseErrorCodes(t *testing.T) {
 		{name: "HTTP overload", err: &APIError{StatusCode: 503, Code: "server_is_overloaded"}, want: true},
 		{name: "HTTP transient status", err: &APIError{StatusCode: 429, Code: "unknown"}, want: true},
 		{name: "HTTP nonstandard status", err: &APIError{StatusCode: 529}, want: true},
-		{name: "unknown stream code", err: &APIError{StatusCode: 200, Code: "unknown"}, want: true},
+		{name: "unknown stream code", err: &APIError{StatusCode: 200, Code: "unknown"}},
 		{name: "numeric stream code", err: &APIError{StatusCode: 200, Code: "429"}, want: true},
 		{name: "in-band rate limit labelled invalid request (Fireworks)", err: &APIError{StatusCode: 200, Type: "invalid_request_error", Code: "invalid_request_error", Message: "rate limit exceeded, please try again later"}, want: true},
 		{name: "in-band final code keeps its label", err: &APIError{StatusCode: 200, Type: "invalid_request_error", Code: "context_length_exceeded"}},
@@ -35,6 +35,9 @@ func TestRetryableResponseErrorCodes(t *testing.T) {
 		{name: "permission type", err: &APIError{StatusCode: 429, Type: "permission_error"}},
 		{name: "unauthorized status", err: &APIError{StatusCode: 401, Code: "rate_limit_exceeded"}},
 		{name: "redirect", err: &APIError{StatusCode: 307}},
+		{name: "expired reference", err: &APIError{StatusCode: 400, Code: "previous_response_not_found"}, want: true},
+		{name: "expired reference cannot override auth", err: &APIError{StatusCode: 401, Code: "previous_response_not_found"}},
+		{name: "policy code", err: &APIError{StatusCode: 503, Code: "policy_violation"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := retryableResponseError(test.err, policy.RetryableStatusCodes); got != test.want {

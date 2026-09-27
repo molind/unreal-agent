@@ -259,7 +259,13 @@ func (a loggedAdapter) Respond(ctx context.Context, r llm.Request, o llm.Request
 			result = errors.Join(result, &diagnosticWriteError{err})
 		}
 	}()
-	return a.Adapter.Respond(ctx, r, o)
+	response, result = a.Adapter.Respond(ctx, r, o)
+	if result == nil && response.Failure != nil {
+		// The chat treats failed responses as errors, never executable output.
+		// Record the actual provider failure rather than request_completed.
+		return llm.Response{}, response.Failure
+	}
+	return response, result
 }
 
 // File lifecycle records contain paths/revisions/capture locations, never source

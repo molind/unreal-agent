@@ -148,6 +148,11 @@ func (adapter *adapter) respondHTTP(ctx context.Context, body []byte, key, fallb
 		return llm.Response{}, fmt.Errorf("create response: %w", providerError(statusCode, responseBody))
 	}
 	response, err := decodeResponse(responseBody)
+	if err == nil && response.Failure != nil {
+		// Preserve the original type/status as well as the legacy failed-response
+		// value. In particular, an auth/billing type must override a generic code.
+		response.Failure.Cause = providerError(statusCode, responseBody)
+	}
 	if err == nil && adapter.reportTransport {
 		var fields struct {
 			Input []jsontext.Value `json:"input"`
@@ -220,6 +225,9 @@ func remoteFailureError(ctx context.Context, event primitives.PrimitiveEvent) er
 	failure, ok := event.Result.(primitives.PrimitiveFailureResult)
 	if !ok {
 		return errors.New("remote request failed with an invalid result")
+	}
+	if failure.Cause != nil {
+		return &providerTransportError{failure.Cause}
 	}
 	return errors.New(failure.Error)
 }

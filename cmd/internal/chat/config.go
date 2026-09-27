@@ -57,6 +57,9 @@ Esc defers. /compact reopens it. Without a TTY use /compact yes or /compact no.
 New text is queued, not approval.
 Original history stays on disk; recent input and active call/result pairs stay intact.
 A context/summary failure stops work but keeps the chat open for /new or /resume.
+Temporary provider failures use up to 3 attempts before generation (configurable).
+After exhaustion or partial generation, work stops but the chat stays open;
+a new message continues. Auth, billing and policy errors are not retried.
 A quiet model/workspace row separates the editable prompt from the transcript.
 NO_COLOR disables styling, not editing/layout. Pipes remain plain Markdown.
 Command and diagnostic log paths are available in /status.
@@ -104,8 +107,8 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 	f.StringVar(&c.baseURL, "base-url", getenv("UNREAL_HARNESS_LLM_BASE_URL"), "provider base URL override")
 	// URLs may include credentials. Keep their environment value out of -h.
 	f.Lookup("base-url").DefValue = ""
-	attempts := env("UNREAL_HARNESS_LLM_MAX_ATTEMPTS", "1")
-	f.Func("max-attempts", "bounded provider request attempts (default 1)", func(v string) error { attempts = v; return nil })
+	attempts := env("UNREAL_HARNESS_LLM_MAX_ATTEMPTS", "3")
+	f.Func("max-attempts", "bounded provider request attempts (default 3)", func(v string) error { attempts = v; return nil })
 	f.StringVar(&c.directory, "session-directory", "", "storage directory (default $XDG_STATE_HOME/unreal-agent/workspaces/<workspace-id>, or $HOME/.local/state/...; relative overrides use workspace)")
 	f.StringVar(&c.storageFormat, "storage-format", "sqlite", "sqlite (default) or legacy jsonl")
 	f.StringVar(&c.session, "session", "", "resume an existing session ID")

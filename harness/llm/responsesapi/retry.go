@@ -13,8 +13,9 @@ import (
 
 var retryAfterMessagePattern = regexp.MustCompile(`(?i)\btry again in\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|seconds?)\b`)
 
-// Providers report failures inconsistently, so this classifier intentionally
-// fails open, favoring retries.
+// Classify explicit temporary failures, never arbitrary in-band errors. Permanent
+// codes/types override retryable statuses; an unknown 2xx error is not permission
+// to retry. HTTP and WebSocket exchanges, and the chat UI, share these rules.
 func retryableResponseError(err *APIError, retryableStatuses []int) bool {
 	if err == nil {
 		return false
@@ -23,17 +24,38 @@ func retryableResponseError(err *APIError, retryableStatuses []int) bool {
 	case "context_length_exceeded", "insufficient_quota", "usage_not_included", "usage_limit_reached",
 		"credit_balance_exhausted", "billing_hard_limit_reached",
 		"cyber_policy", "misalignment_policy_violation", "invalid_prompt", "bio_policy",
-		"invalid_api_key", "invalid_token":
+		"invalid_api_key", "invalid_token", "authentication_error", "permission_denied", "access_denied",
+		"policy_violation", "content_policy_violation", "account_deactivated":
 		return false
 	}
 	switch err.Type {
-	case "authentication_error", "permission_error", "insufficient_quota":
+	case "authentication_error", "permission_error", "insufficient_quota", "billing_error", "policy_violation":
 		return false
 	}
-	if err.StatusCode < http.StatusOK || err.StatusCode >= http.StatusMultipleChoices {
+	// Connection-scoped references can expire with an HTTP-style 400 even
+	// though a full resynchronization is valid. Auth/policy types above win.
+	if err.StatusCode == http.StatusBadRequest && (err.Code == "previous_response_not_found" || err.Code == "websocket_connection_limit_reached") {
+		return true
+	}
+	if err.StatusCode != 0 && (err.StatusCode < http.StatusOK || err.StatusCode >= http.StatusMultipleChoices) {
 		return slices.Contains(retryableStatuses, err.StatusCode)
 	}
-	return true
+	switch err.Code {
+	case "server_error", "internal_error", "service_unavailable", "temporarily_unavailable",
+		"server_is_overloaded", "overloaded", "overloaded_error", "slow_down",
+		"rate_limit_exceeded", "rate_limit_error", "too_many_requests", "timeout", "request_timeout",
+		"previous_response_not_found", "websocket_connection_limit_reached":
+		return true
+	}
+	if status, parseErr := strconv.Atoi(err.Code); parseErr == nil {
+		return slices.Contains(retryableStatuses, status)
+	}
+	if err.Code == "" && (err.Type == "server_error" || err.Type == "overloaded_error" || err.Type == "rate_limit_error") {
+		return true
+	}
+	// Fireworks sometimes labels rate limiting as an invalid request in a
+	// successful stream. Do not extend that exception to arbitrary error text.
+	return err.Code == "invalid_request_error" && strings.Contains(strings.ToLower(err.Message), "rate limit exceeded")
 }
 
 func responseRetryDelay(policy primitives.RemoteRetryPolicy, attempt int, err *APIError, headers http.Header, now time.Time, jitter float64) time.Duration {

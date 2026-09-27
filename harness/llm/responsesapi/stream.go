@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/unreallabsai/unreal-agent/harness/primitives"
@@ -122,19 +123,23 @@ func (adapter *adapter) exchangeAttempt(ctx context.Context, request primitives.
 			result.apiError = providerError(result.status, result.body)
 		case transportErr != nil:
 			result.err = transportErr
-			result.retry = event.Type == primitives.PrimitiveEventFailed
+			result.retry = !state.begun && event.Type == primitives.PrimitiveEventFailed && IsTransientError(transportErr)
 			return result
 		default:
 			result.body, result.err = state.unwrap()
-			result.retry = errors.Is(result.err, io.ErrUnexpectedEOF)
+			if errors.Is(result.err, io.ErrUnexpectedEOF) {
+				result.err = &providerTransportError{result.err}
+				result.retry = !state.begun
+			}
 			return result
 		}
-		result.retry = retryableResponseError(result.apiError, request.RetryPolicy.RetryableStatusCodes)
+		result.retry = !state.begun && retryableResponseError(result.apiError, request.RetryPolicy.RetryableStatusCodes)
 		return result
 	}
 }
 
 type responseState struct {
+	begun    bool // Any observed generation forbids automatic resubmission.
 	terminal bool
 	response jsontext.Value
 	items    map[int]jsontext.Value
@@ -164,6 +169,17 @@ func (state *responseState) observe(data []byte) error {
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
 		return fmt.Errorf("invalid Responses stream event JSON: %w", err)
+	}
+	if strings.HasPrefix(event.Type, "response.") && event.Type != "response.failed" {
+		state.begun = true
+	}
+	if event.Type == "response.failed" {
+		var terminal struct {
+			Output []jsontext.Value `json:"output"`
+		}
+		if json.Unmarshal(event.Response, &terminal) == nil && len(terminal.Output) > 0 {
+			state.begun = true
+		}
 	}
 	if event.Type == "response.completed" || event.Type == "response.failed" || event.Type == "response.incomplete" {
 		state.terminal = true
