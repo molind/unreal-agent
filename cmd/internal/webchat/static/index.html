@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#141816">
+  <title>Unreal · Local agent</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <div class="brand"><span class="mark">u</span> unreal</div>
+      <h1>Your workspace,<br>wherever you are.</h1>
+      <p>Enter the access token from your server to continue.</p>
+      <label for="token">Access token</label>
+      <input id="token" type="password" autocomplete="current-password" required>
+      <button class="primary" type="submit">Connect</button>
+      <p id="login-error" role="alert"></p>
+    </form>
+  </section>
+  <div id="app" class="app" hidden>
+    <aside id="sidebar">
+      <div class="brand"><span class="mark">u</span> unreal <button id="close-sidebar" class="icon mobile" aria-label="Close conversations">×</button></div>
+      <div class="sidebar-tabs" role="tablist" aria-label="Навігацыя">
+        <button id="tab-projects" role="tab" aria-selected="true" aria-controls="navigation-panel">Праекты</button>
+        <button id="tab-recent" role="tab" aria-selected="false" aria-controls="navigation-panel" tabindex="-1">Апошняе</button>
+        <button id="add-project" class="icon" aria-label="Add workspace" title="Add workspace">+</button>
+      </div>
+      <div id="navigation-panel" class="navigation-panel" role="tabpanel" aria-labelledby="tab-projects">
+        <section id="pinned-section" aria-label="Pinned">
+          <div class="section-label">Pinned</div>
+          <nav id="pinned" aria-label="Pinned conversations"></nav>
+          <p id="pinned-empty" class="sidebar-empty">Замацуйце размову кнопкай ☆</p>
+        </section>
+        <div id="folder-header" hidden>
+          <button id="back-projects" class="quiet back-projects">← Праекты</button>
+          <h2 id="folder-title"></h2>
+          <p id="workspace-path" class="muted path"></p>
+          <button id="new-session" class="new-session">＋ New conversation</button>
+        </div>
+        <div id="list-label" class="section-label">ПРАЕКТЫ</div>
+        <p id="navigation-warning" class="sidebar-warning" role="status" hidden></p>
+        <nav id="sessions" aria-label="Projects and conversations"></nav>
+        <p id="list-empty" class="sidebar-empty" hidden></p>
+      </div>
+      <div class="sidebar-footer"><span id="connection" class="connection">Connecting</span><button id="logout" class="quiet">Sign out</button></div>
+    </aside>
+    <main>
+      <header><button id="open-sidebar" class="icon mobile" aria-label="Open conversations">☰</button><div class="heading"><h1 id="title">Your local workspace</h1><p id="status">Choose a workspace to begin</p></div><button id="release" class="quiet" title="Stop work and release this session for the CLI" hidden>Release</button></header>
+      <div id="notice" role="alert" hidden></div>
+      <section id="transcript" aria-label="Conversation" tabindex="0"><div class="empty"><span class="eyebrow">LOCAL BY DESIGN</span><h2>A little more room<br>to think.</h2><p>Choose a folder on your machine.<br>Start a conversation, or pick up where you left off.</p><button id="empty-add" class="primary">Add a workspace</button></div></section>
+      <section id="approval" hidden><p>The context needs another compaction. Approve one attempt?</p><button id="approve">Compact once</button><button id="decline" class="quiet">Stop work</button></section>
+      <footer class="composer-area">
+        <form id="composer"><label class="sr-only" for="message">Message</label><textarea id="message" rows="3" placeholder="What would you like to work on?" disabled></textarea><div class="composer-actions"><span id="draft-state">Runs on your machine</span><button id="resume" type="button" class="quiet" hidden>Resume work</button><button id="stop" type="button" class="quiet" hidden>Stop</button><button id="send" type="submit" class="primary" disabled>Send ↑</button></div></form>
+        <p class="footnote">Work continues when you leave. Ctrl / ⌘ + Enter to send.</p>
+      </footer>
+    </main>
+  </div>
+  <dialog id="project-dialog"><form id="project-form"><h2>Add a workspace</h2><p>Use an existing folder on the machine running Unreal.</p><label for="project-path">Absolute folder path</label><input id="project-path" placeholder="/Users/you/projects/my-project" autocomplete="off" required><p id="project-error" role="alert"></p><div class="dialog-actions"><button id="cancel-project" type="button" class="quiet">Cancel</button><button class="primary">Add workspace</button></div></form></dialog>
+</body>
+</html>

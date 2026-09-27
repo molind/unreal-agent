@@ -13,6 +13,11 @@ Build the executables with `make build`, then run `./bin/unreal_chat [workspace]
 for authentication, flags, session commands, and local-execution safety limits.
 The existing `unreal-agent-runner` remains the one-shot JSONL interface.
 
+For a mobile browser UI with background sessions in multiple local folders, run
+`./bin/unreal_web /absolute/path/to/project`. It shares the CLI's SQLite history
+and can be reached privately on a Tailscale IP or through Tailscale Serve. See the
+[web server README](cmd/unreal_web/README.md) for sign-in, HTTPS and service setup.
+
 ## Glossary
 
 - **Input**: an event with a caller-supplied globally unique ID that remains

@@ -166,10 +166,20 @@ func Directory(workspace string, getenv func(string) string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	root, err := WorkspacesDirectory(getenv)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, Hash([]byte(canonical))), nil
+}
+
+// WorkspacesDirectory is the catalog root shared by CLI and web hosts.
+func WorkspacesDirectory(getenv func(string) string) (string, error) {
 	home := getenv("XDG_STATE_HOME")
 	if !filepath.IsAbs(home) {
 		home = getenv("HOME")
 		if home == "" {
+			var err error
 			home, err = os.UserHomeDir()
 			if err != nil {
 				return "", err
@@ -180,7 +190,7 @@ func Directory(workspace string, getenv func(string) string) (string, error) {
 		}
 		home = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(home, "unreal-agent", "workspaces", Hash([]byte(canonical))), nil
+	return filepath.Join(home, "unreal-agent", "workspaces"), nil
 }
 
 func (db *DB) BindWorkspace(ctx context.Context, workspace string) error {
