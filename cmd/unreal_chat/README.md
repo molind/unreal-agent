@@ -651,7 +651,18 @@ failures before log storage can be opened may only have stderr diagnostics.
 - Tools run **locally with all permissions of this process**. The prompt says
   discussion is not authorization to edit; explicit implementation requests
   authorize relevant edits/tests. Workspace-root `AGENTS.md` is included.
-  This is **not** an enforced read-only mode, sandbox, or approval system.
+  This is **not** an enforced read-only mode, sandbox, or general approval system.
+- Shell requests invoking **`ssh`, `scp`, or `rsync`** wait for explicit permission,
+  for every host (including local-only rsync). The CLI displays the full command,
+  working directory and `/permit OPERATION REQUEST yes|no` instructions. Approval
+  permits the **entire displayed shell request once**, not a host or future commands.
+  `/cancel ID`, `/stop` and exit cancel a waiting request. Ordinary messages,
+  including `yes`, do not approve it. Restart requires a fresh request token.
+  Other commands do not require approval. Detection covers direct/absolute/quoted
+  command names, compound commands, substitutions, common launchers (`sudo`, `env`,
+  etc.) and literal `sh -c`/`eval` commands. This is an accidental-execution guard:
+  it does not inspect script files, resolve aliases/variables, or intercept SSH
+  launched internally by another program (for example Git over SSH).
 - Bash (`/bin/sh`), ViewImage, Read, Edit and Write are available. No remote tools, skill discovery,
   background jobs surviving exit, or multiple agents are added by this MVP.
 - SQLite permits parallel processes in different sessions of one workspace,

@@ -587,7 +587,7 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := r.PathValue("action")
-	if !slices.Contains([]string{"send", "resume", "stop", "compact", "cancel", "release"}, action) {
+	if !slices.Contains([]string{"send", "resume", "stop", "compact", "cancel", "release", "permit", "deny"}, action) {
 		http.NotFound(w, r)
 		return
 	}
@@ -619,6 +619,8 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 				err = owner.Stop()
 			case "compact":
 				err = owner.Approve(body.RequestID)
+			case "permit", "deny":
+				err = owner.Permit(body.ID, body.RequestID, action == "permit")
 			case "cancel":
 				err = owner.Cancel(body.ID)
 			}

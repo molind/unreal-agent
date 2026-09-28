@@ -49,6 +49,8 @@ type ShellResult struct {
 }
 
 type ShellState struct {
+	// ApprovalID is a pending, runtime-scoped permission, never a reusable grant.
+	ApprovalID    string `json:",omitzero"`
 	Input         ShellInput
 	BaseDirectory string
 

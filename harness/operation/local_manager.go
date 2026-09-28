@@ -11,6 +11,8 @@ import (
 
 type LocalOperationManager struct {
 	database        *storage.DB
+	shellApprovals  bool
+	approvals       chan shellApprovalRequest
 	ctx             context.Context
 	remoteJobs      *remoteJobHandlers
 	adds            chan localAddRequest
@@ -32,6 +34,7 @@ type localCancelRequest struct {
 }
 
 type localRunningOperation struct {
+	approvalID            string
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	operation             Operation
@@ -67,8 +70,14 @@ func NewLocalOperationManager(ctx context.Context, remoteJobHandlers ...RemoteJo
 	return NewLocalOperationManagerWithStorage(ctx, nil, remoteJobHandlers...)
 }
 func NewLocalOperationManagerWithStorage(ctx context.Context, db *storage.DB, remoteJobHandlers ...RemoteJobHandler) *LocalOperationManager {
+	return newLocalOperationManager(ctx, db, false, remoteJobHandlers...)
+}
+
+func newLocalOperationManager(ctx context.Context, db *storage.DB, approvals bool, remoteJobHandlers ...RemoteJobHandler) *LocalOperationManager {
 	manager := &LocalOperationManager{
 		database:        db,
+		shellApprovals:  approvals,
+		approvals:       make(chan shellApprovalRequest),
 		ctx:             ctx,
 		remoteJobs:      newRemoteJobHandlers(ctx, remoteJobHandlers),
 		adds:            make(chan localAddRequest),
@@ -171,6 +180,19 @@ func (manager *LocalOperationManager) run() {
 					return advanceFileStored(current.operation, event, manager.database)
 				}
 			}
+			gate, err := manager.gateShell(current)
+			if err != nil {
+				cancel()
+				request.result <- err
+				continue
+			}
+			if gate != nil {
+				accepted[request.operation.ID] = struct{}{}
+				operations[request.operation.ID] = current
+				activePrimitives += manager.acceptLocalStep(operations, current, *gate)
+				request.result <- nil
+				continue
+			}
 			step, err := current.handle(nil)
 			if err != nil {
 				cancel()
@@ -181,6 +203,11 @@ func (manager *LocalOperationManager) run() {
 			operations[request.operation.ID] = current
 			activePrimitives += manager.acceptLocalStep(operations, current, step)
 			request.result <- nil
+
+		case request := <-manager.approvals:
+			started, err := manager.resolveShellApproval(operations, request)
+			activePrimitives += started
+			request.result <- err
 
 		case request := <-manager.cancellations:
 			current, exists := operations[request.id]
@@ -197,6 +224,13 @@ func (manager *LocalOperationManager) run() {
 				continue
 			}
 			current.cancel()
+			if current.approvalID != "" {
+				// No primitive is running to deliver a canceled event for a gate.
+				canceled := current.operation
+				canceled.Status = StatusCanceled
+				manager.appendLocalUpdate(canceled)
+				delete(operations, request.id)
+			}
 			request.result <- nil
 
 		case update := <-manager.remoteJobs.updates:

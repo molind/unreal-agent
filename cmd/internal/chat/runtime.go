@@ -96,7 +96,7 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 		cancel()
 		return nil, err
 	}
-	r := &runtime{inputs: inputs, operations: operation.NewLocalOperationManagerWithStorage(ctx, store.Database()), cancel: cancel, events: make(chan event, 128), done: make(chan error, 1)}
+	r := &runtime{inputs: inputs, operations: operation.NewLocalOperationManagerWithApprovals(ctx, store.Database()), cancel: cancel, events: make(chan event, 128), done: make(chan error, 1)}
 	emit := func(e event) {
 		select {
 		case r.events <- e:

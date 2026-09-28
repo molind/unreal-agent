@@ -364,7 +364,17 @@ func (a *application) event(e event) error {
 		return boundary("output item", a.display.item(*e.item, false))
 	}
 	if e.op != nil {
-		return boundary("output operation", a.display.operation(*e.op, "", false))
+		if err := a.display.operation(*e.op, "", false); err != nil {
+			return boundary("output operation", err)
+		}
+		if requestID := operation.ShellApprovalID(*e.op); requestID != "" && !a.stopping {
+			shell, err := operation.DecodeShellState(*e.op)
+			if err != nil {
+				return err
+			}
+			return a.display.print("Shell permission required (ssh/scp/rsync). Nothing in this command has executed.\nDirectory: %s\nCommand:\n%s\nAllow this entire command once?\n/permit %s %s yes\n/permit %s %s no\n/stop also cancels; ordinary messages never grant permission.\n", shell.Input.Directory, shell.Input.Command, e.op.ID, requestID, e.op.ID, requestID)
+		}
+		return nil
 	}
 	return nil
 }
@@ -522,7 +532,7 @@ func isCommand(text string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/status", "/sessions", "/new", "/resume", "/cancel", "/compact", "/stop", "/exit", "/quit":
+	case "/help", "/status", "/sessions", "/new", "/resume", "/cancel", "/compact", "/permit", "/stop", "/exit", "/quit":
 		return true
 	}
 	return false
@@ -538,6 +548,8 @@ func (a *application) command(text string) (bool, error) {
 	switch name {
 	case "/cancel":
 		want = 2
+	case "/permit":
+		want = 4
 	}
 	if (name == "/resume" || name == "/compact") && len(fields) == 2 {
 		want = 2
@@ -569,13 +581,21 @@ func (a *application) command(text string) (bool, error) {
 		})
 	case "/sessions":
 		return false, a.report("Saved sessions", func(view *application) error { return view.listSessions() })
+	case "/permit":
+		if (fields[3] != "yes" && fields[3] != "no") || a.runtime == nil || a.stopping {
+			return false, a.display.print("Usage: /permit ID REQUEST yes|no, for a pending shell permission request.\n")
+		}
+		if err := a.runtime.operations.ResolveShellApproval(operation.ID(fields[1]), fields[2], fields[3] == "yes"); err != nil {
+			return false, a.display.print("Cannot resolve shell permission: %v\n", err)
+		}
+		return false, a.display.print("Shell permission decision accepted for this command only.\n")
 	case "/cancel":
 		id := operation.ID(fields[1])
 		notice, ok := a.display.operations[id]
 		if !ok || notice.state == "" || a.runtime == nil {
 			return false, a.display.print("No active operation %q. Use /status.\n", id)
 		}
-		if notice.state != "running" && notice.state != "canceling" {
+		if notice.state != "running" && notice.state != "canceling" && notice.state != "awaiting permission" {
 			return false, a.display.print("Operation %s is already %s.\n", id, notice.state)
 		}
 		if err := a.runtime.operations.Cancel(id, "User canceled operation"); err != nil {

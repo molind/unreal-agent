@@ -23,6 +23,7 @@ const help = `Enter a complete line to send a message (also while work is runnin
 /new           Stop current work and open a fresh unsaved chat
 /resume [ID]   Choose a saved session, or stop/join and resume the exact ID
 /cancel ID     Cancel only this operation
+/permit ID REQUEST yes|no  Allow once or deny the displayed shell permission request
 /compact       Reopen the compaction approval menu (plain mode: /compact yes|no)
 /stop          Stop all current work; keep history; no automatic retry
 /exit, /quit   Stop work and exit (EOF also exits)
@@ -77,6 +78,7 @@ Discussion, questions, and requests to explain code are NOT permission to edit f
 Explicit requests to implement or fix authorize relevant edits and tests. Clarify ambiguous requests.
 Prefer Read for text files, Edit for targeted changes, and Write for whole-file creation/replacement. Do not use shell/Python file-edit scripts when these structured tools can perform the change. Read returns a short revision; use it for Edit/Write and re-read after a conflict. Bash is for commands, builds and tests.
 Tools execute with the local process permissions; there is no isolated sandbox and no enforced read-only mode.
+Shell commands invoking ssh, scp or rsync require explicit, one-shot user approval before execution. Never bypass this guard through scripts, aliases, other tools or encoded commands. If permission is denied, do not retry without a new user request.
 Never expose credentials or private reasoning. Do not read credential files to answer the user.
 This is an ongoing chat: an ordinary reply ends only your response, not the application.
 After a user stop, do not retry interrupted work unless the next user request authorizes it.

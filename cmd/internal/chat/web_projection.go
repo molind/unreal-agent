@@ -35,6 +35,8 @@ type WebItem struct {
 var webMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 type WebOperation struct {
+	ApprovalID  string `json:"approval_id,omitempty"`
+	Directory   string `json:"directory,omitempty"`
 	ID          string `json:"id"`
 	State       string `json:"state"`
 	Description string `json:"description"`
@@ -48,6 +50,8 @@ func ProjectOperation(op operation.Operation, safe func(string) string) WebOpera
 	case operation.TypeShell:
 		if s, err := operation.DecodeShellState(op); err == nil {
 			v.Description = s.Input.Command
+			v.ApprovalID = operation.ShellApprovalID(op)
+			v.Directory = safe(s.Input.Directory)
 			v.Output = s.TerminalError
 			if s.Result != nil {
 				v.Output += s.Result.Out + s.Result.Err

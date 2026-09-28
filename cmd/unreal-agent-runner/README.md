@@ -48,6 +48,11 @@ and legacy files in the chosen directory. The old shared runner-default director
 is not auto-imported: it may contain sessions from several workspaces. Migrate such
 stores explicitly only after checking their workspace ownership.
 
+Shell requests invoking `ssh`, `scp` or `rsync` require explicit user approval.
+This noninteractive runner cannot collect it, so those requests fail without
+execution. Use `unreal_chat` or `unreal_web` to review and approve them. This is a
+submitted-command guard, not a sandbox for script files or indirect SSH usage.
+
 You can also pass a JSON request as an argument or through stdin:
 
 ```sh

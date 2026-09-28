@@ -318,6 +318,24 @@ function renderTool(operation) {
     }
     element.append(diff);
   }
+  if (operation.approval_id) {
+    element.open = true;
+    const explanation = document.createElement('p'); explanation.textContent = 'Permission required for ssh / scp / rsync. Nothing in this command has executed. Allow the entire command once?';
+    const command = document.createElement('pre'); command.textContent = 'Directory: ' + operation.directory + '\n\n' + operation.description;
+    const actions = document.createElement('div'); actions.className = 'actions';
+    // Capture the originating session: a stale DOM control cannot approve in a new chat.
+    const target = 'projects/' + state.project + '/sessions/' + state.session + '/';
+    for (const [action, label] of [['deny', 'Deny'], ['permit', 'Allow once']]) {
+      const button = document.createElement('button'); button.className = action === 'permit' ? 'primary' : 'quiet'; button.textContent = label;
+      button.addEventListener('click', async () => {
+        for (const control of actions.children) control.disabled = true;
+        try { await api(target + action, { id: operation.id, request_id: operation.approval_id }); scheduleRefresh(); }
+        catch (error) { notice(error.message); for (const control of actions.children) control.disabled = false; }
+      });
+      actions.append(button);
+    }
+    element.append(explanation, command, actions);
+  }
   if (operation.state === 'running' || operation.state === 'canceling') {
     const cancel = document.createElement('button'); cancel.className = 'quiet'; cancel.textContent = 'Cancel operation';
     cancel.addEventListener('click', () => act('cancel', { id: operation.id }).catch(error => notice(error.message))); element.append(cancel);

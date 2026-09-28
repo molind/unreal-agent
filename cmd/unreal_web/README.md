@@ -106,6 +106,14 @@ and [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve).
   canonical history and artifacts remain on disk.
 - Compaction approval applies to the displayed request only. New messages do not
   grant compaction permission. You may cancel a single active operation.
+- Shell requests invoking `ssh`, `scp` or `rsync` wait for **Allow once** or **Deny**.
+  The expanded tool card shows the entire command and working directory. Nothing
+  in that shell request executes before approval. Consent applies to that request
+  only; new messages, reconnects and stale buttons cannot grant permission. Stop
+  and Release cancel pending requests. If an unfinished request is restored after
+  a crash, Resume asks again with a fresh permission token.
+  This guards submitted commands, not arbitrary script contents or indirect SSH
+  usage by other programs; it is not a sandbox. See the CLI safety limitations.
 
 Messages support up to 1 MiB of UTF-8 text. The browser saves drafts and pending
 message IDs in local storage on that device. If sending is interrupted, **Retry**

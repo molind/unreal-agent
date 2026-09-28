@@ -227,11 +227,23 @@ func (h *Headless) observe(run *headlessRun) {
 			// recent overlay for late terminal checkpoints, plus every live job.
 			if len(h.status.Operations) > 100 {
 				for i, op := range h.status.Operations {
-					if op.State != "running" && op.State != "canceling" {
+					if op.State != "running" && op.State != "canceling" && op.ApprovalID == "" {
 						h.status.Operations = append(h.status.Operations[:i], h.status.Operations[i+1:]...)
 						break
 					}
 				}
+			}
+		}
+		if h.status.State == "waiting" {
+			h.status.State = "working"
+		}
+		if h.status.Context.ApprovalID != "" {
+			h.status.State = "waiting"
+		}
+		for _, op := range h.status.Operations {
+			if op.ApprovalID != "" {
+				h.status.State = "waiting"
+				break
 			}
 		}
 		h.mu.Unlock()
@@ -341,6 +353,15 @@ func (h *Headless) Approve(requestID string) error {
 		return errors.New("compaction request is no longer pending")
 	}
 	return h.run.runtime.inputs.Submit(h.ctx, newInput(inbox.InputControl, inbox.ControlMessage{Mode: inbox.ApproveCompaction, Parameters: inbox.ContextRecovery{RequestID: requestID}}))
+}
+
+func (h *Headless) Permit(id, requestID string, allow bool) error {
+	h.actions.Lock()
+	defer h.actions.Unlock()
+	if h.closed || h.run == nil {
+		return errors.New("session is not running")
+	}
+	return h.run.runtime.operations.ResolveShellApproval(operation.ID(id), requestID, allow)
 }
 
 func (h *Headless) Cancel(id string) error {

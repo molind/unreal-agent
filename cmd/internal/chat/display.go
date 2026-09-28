@@ -175,7 +175,7 @@ func (d *display) operation(op operation.Operation, desc string, replay bool) er
 	}
 	// A durable ready checkpoint is not yet owned by the manager. This also
 	// applies during replay: do not expose a cancellable ID before Add.
-	if op.Status == operation.StatusReady {
+	if op.Status == operation.StatusReady && operation.ShellApprovalID(op) == "" {
 		d.operations[op.ID] = operationNotice{description: desc}
 		return nil
 	}
@@ -273,6 +273,12 @@ func (d *display) status() error {
 	if d.generating {
 		state = "model generating / input pending"
 	}
+	for _, notice := range d.operations {
+		if notice.state == "awaiting permission" {
+			state = "awaiting shell permission"
+			break
+		}
+	}
 	if d.contextStatus.ApprovalID != "" {
 		state = "awaiting compaction approval"
 	}
@@ -309,6 +315,9 @@ func (d *display) status() error {
 }
 
 func operationState(op operation.Operation) string {
+	if operation.ShellApprovalID(op) != "" {
+		return "awaiting permission"
+	}
 	state := "running"
 	if terminal(op.Status) || op.Status == operation.StatusCanceling {
 		state = string(op.Status)
@@ -342,7 +351,7 @@ func (d *display) tick(frame int) error {
 	}
 	ids := make([]string, 0, len(d.operations))
 	for id, n := range d.operations {
-		if n.state == "running" || n.state == "canceling" {
+		if n.state == "running" || n.state == "canceling" || n.state == "awaiting permission" {
 			ids = append(ids, string(id))
 		}
 	}
