@@ -72,7 +72,7 @@ and [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
 - **Праекты** lists workspace folders, ordered by their latest conversation.
   Open a folder to see its conversations, newest first, and create a new one.
-  **Апошняе** lists conversations across all folders with the project name below
+  **Апошнія** lists conversations across all folders with the project name below
   each title. Both views sort by the latest committed user message or assistant
   reply; tool checkpoints and compaction summaries do not change the order.
   Empty conversations use their creation time until the first message.
@@ -82,45 +82,83 @@ and [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve).
   while the UI is open. Custom `-session-directory` databases outside that catalog
   are not searched. An unavailable project is shown with an error; other projects
   remain usable.
-- Use **☆** beside a conversation to put it in **Pinned** and **★** to unpin it.
+- Use **☆** beside a conversation to put it in **Замацаваныя** and **★** to unpin it.
   Pins are shared across browsers and persisted in the web state directory.
   Pinned appears above both root tabs; it is hidden inside a project folder.
   Pinned conversations are omitted from the remaining Recent list, but still
   appear in their project. Pinning or browsing never starts agent work.
+- Open a conversation and choose **⋯ → Выдаліць размову…**, then **Выдаліць лакальна** to
+  delete it. The server stops and joins its work, removes the indexed history,
+  operation checkpoints and diagnostics, and unpins it. A session owned by a
+  separate CLI/server must be released there first. Other conversations and
+  project files are unchanged. Connected browsers refresh their selection and
+  clear drafts/pending messages for deleted sessions; offline browsers do this
+  when they reconnect to the same origin.
 - Add existing folders by their **absolute path on the server machine**. Symlink
   aliases resolve to the same workspace. The sidebar lists conversations from
   the existing workspace SQLite database, including CLI-created sessions.
 - New conversation creates an empty saved session. Opening its history is
-  passive. Send a message or choose **Resume work** to start the agent. After a
+  passive. Send a message or choose **Працягнуць** to start the agent. After a
   server restart, saved sessions require this explicit action; they never start
   merely because the browser reconnects.
 - Sessions run independently. Switching conversations, closing a tab, locking a
   phone or losing a connection does not cancel work. The host must remain awake.
-- Send during a running task to steer it. **Stop** cancels/joins model and tool
-  work while retaining the session lease and history. **Release** also gives up
-  ownership so `unreal_chat -session ID WORKSPACE` can take over. A session already
-  owned by another CLI/server is refused, never stolen. Different sessions in
-  the same folder share its files; use separate folders/worktrees for isolation.
+- Send during a running task to steer it. **Спыніць** cancels/joins model and tool
+  work while retaining history. There is no manual Release control in the UI.
+  The server checks once a minute and releases idle session resources after one
+  hour without a user message or model response. Newly opened owners get a fresh
+  one-hour grace period. Active model/tool work, pending message delivery,
+  compaction and permission requests are never expired. This works even with no
+  browsers connected; viewing history and pinning do not reset the timer.
+  Cleanup does not delete history, pins, drafts or project files. Send the next
+  message or choose **Працягнуць** to acquire resources again. Durable message IDs
+  still prevent duplicate sends after cleanup. A session already owned by another
+  process is refused, never stolen. Different sessions in the same folder share
+  its files; use separate folders/worktrees for isolation.
 - Markdown, tables, copyable code, tool results and file diffs are displayed.
   Raw HTML and external images are disabled. Output previews are bounded;
   canonical history and artifacts remain on disk.
 - Compaction approval applies to the displayed request only. New messages do not
   grant compaction permission. You may cancel a single active operation.
-- Shell requests invoking `ssh`, `scp` or `rsync` wait for **Allow once** or **Deny**.
-  The expanded tool card shows the entire command and working directory. Nothing
-  in that shell request executes before approval. Consent applies to that request
-  only; new messages, reconnects and stale buttons cannot grant permission. Stop
-  and Release cancel pending requests. If an unfinished request is restored after
-  a crash, Resume asks again with a fresh permission token.
+- Shell requests invoking `ssh`, `scp` or `rsync` wait for **Дазволіць адзін раз**
+  or **Адхіліць**. The expanded tool card shows the entire command and working
+  directory. Nothing in that shell request executes before approval. Consent
+  applies to that request only; new messages, reconnects and stale buttons cannot
+  grant permission. **Спыніць** cancels pending requests; automatic idle cleanup
+  leaves them alone. If an unfinished request is restored after a crash,
+  **Працягнуць** asks again with a fresh permission token.
   This guards submitted commands, not arbitrary script contents or indirect SSH
   usage by other programs; it is not a sandbox. See the CLI safety limitations.
 
 Messages support up to 1 MiB of UTF-8 text. The browser saves drafts and pending
-message IDs in local storage on that device. If sending is interrupted, **Retry**
+message IDs in local storage on that device. If sending is interrupted, **Паўтарыць**
 uses the same ID. The server acknowledges only a committed input and checks
 persisted IDs on restart. Reusing an ID for different text is rejected. Drafts
 and pending messages therefore contain conversation text on the browser device;
 use a trusted browser profile.
+
+### Deletion and provider data
+
+Deletion cannot be undone through the UI. It is **not secure erasure**: shared
+immutable artifacts/chunks, captured tool output, migration archives, file-tool
+receipts, forks and external backups can retain content. SQLite/WAL and other
+browser profiles/origins can also retain copies. This change does not implement
+artifact garbage collection or erase project files.
+
+Unreal keeps conversation state locally and sends Responses requests with
+`store: false` (including its Codex subscription client). It does not create
+OpenAI Conversations API objects. Deleting a local conversation does not send a
+remote deletion request or certify that OpenAI has removed all copies.
+
+The public API offers
+[DELETE /v1/responses/{response_id}](https://developers.openai.com/api/reference/typescript/resources/responses/methods/delete)
+for stored response objects. That is separate from
+[API retention and abuse-monitoring logs](https://developers.openai.com/api/docs/guides/your-data).
+The subscription client uses `chatgpt.com/backend-api/codex`, not the public API;
+no supported deletion contract for this integration was found in the public
+documentation. Do not send subscription credentials to the public API or invent
+a backend deletion route. Codex subscription usage is subject to
+[ChatGPT/Codex data controls](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
 
 ## Model configuration
 
@@ -161,18 +199,32 @@ notification also catches changes made by another local host. Slow subscribers
 have bounded write deadlines and never block runtime event consumption.
 
 The API has project registration/listing, idempotent session creation by UUID,
-session listing/history, and explicit `send`, `resume`, `stop`, `release`,
-`compact`, and `cancel` actions. Runtime lifetime belongs to the server, never
-the HTTP request context. SIGINT/SIGTERM stop/join work before storage closes.
+session listing/history, `DELETE /api/projects/{project}/sessions/{session}`,
+and explicit `send`, `resume`, `stop`, `compact`, `cancel`, `permit` and `deny`
+actions. The `release` endpoint remains for compatibility with older clients;
+the current UI uses automatic idle cleanup instead. Runtime lifetime belongs to
+the server, never the HTTP request context. SIGINT/SIGTERM join the maintenance
+loop and stop/join work before storage closes.
 
 ```sh
 go test -race ./cmd/internal/chat ./cmd/internal/webchat ./cmd/unreal_web
 go vet ./cmd/internal/chat ./cmd/internal/webchat ./cmd/unreal_web
 node --check cmd/internal/webchat/static/app.js
+# Requires Chrome/Chromium, or CHROME_BIN pointing to its executable:
+node --test cmd/internal/webchat/ui_test.mjs
 ```
 
 Tests cover durable retries across restart, independent sessions, canonical
 paths, CLI lease exclusion/handoff, authentication/Origin checks, safe Markdown,
 SSE disconnect and shutdown, SQLite project discovery, message-based ordering,
-and persistent pins across projects. Replies currently arrive on model completion;
-token streaming, file uploads and push notifications are outside this version.
+persistent pins, idle cleanup without connected browsers, and safe reacquisition.
+Browser tests cover Belarusian plural forms, common control styles, keyboard
+focus, mobile layouts, pending actions, drafts and retries using mock APIs.
+Replies currently arrive on model completion; token streaming, file uploads and
+push notifications are outside this version.
+
+## Visual patterns
+
+Use the shared [visual patterns](../internal/webchat/STYLE.md) for UI changes.
+Buttons, action groups and dialogs share tokens and classes from `static/app.css`;
+feature-specific button sizes and spacing overrides are not part of the design.

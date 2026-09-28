@@ -132,3 +132,11 @@ not shrink on row deletion without maintenance; garbage collection, cross-worksp
 deduplication, FTS search and standalone single-session database export are not
 part of this first version. `history SESSION` exports a session's JSONL transcript;
 `backup FILE` includes the entire workspace database, including other sessions.
+
+The web UI can explicitly delete a session through `localfile.DeleteSession`.
+It requires the session lease and transactionally removes its `sessions`, `events`,
+`operations` and `diagnostics` rows. Immutable artifacts, captures, file-tool
+receipts, migration archives and copies in forks/backups remain. This removes
+the conversation from normal listing/replay; it is not secure content erasure.
+Keeping shared immutable artifacts also preserves concurrent readers that hydrate
+references after releasing their SQL snapshot.

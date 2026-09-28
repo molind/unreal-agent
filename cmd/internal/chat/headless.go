@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/unreallabsai/unreal-agent/cmd/internal/agentrunner"
@@ -37,6 +38,7 @@ type Headless struct {
 	run                     *headlessRun
 	closed                  bool
 	status                  HeadlessStatus
+	lastMessage             time.Time // Under mu; opening an owner starts a fresh grace period.
 	inputs                  map[string]*delivery
 }
 
@@ -76,7 +78,7 @@ func OpenHeadless(ctx context.Context, args []string, getenv func(string) string
 	if err != nil {
 		return nil, err
 	}
-	h := &Headless{ctx: ctx, config: c, store: s, release: release, safe: newDisplay(io.Discard, getenv).safe, notify: notify, inputs: make(map[string]*delivery), status: HeadlessStatus{State: "stopped"}}
+	h := &Headless{ctx: ctx, config: c, store: s, release: release, safe: newDisplay(io.Discard, getenv).safe, notify: notify, inputs: make(map[string]*delivery), status: HeadlessStatus{State: "stopped"}, lastMessage: time.Now()}
 	h.newClient = func() (agentrunner.Client, error) { return c.client(providers, getenv) }
 	defer func() {
 		if result != nil {
@@ -199,7 +201,13 @@ func (h *Headless) observe(run *headlessRun) {
 			}
 		}
 		if e.item != nil {
+			// Record activity with the status update: a just-completed reply must
+			// not be reaped using an older history/sidebar timestamp.
+			if _, ok := e.item.Data.(sessionstore.ModelResponse); ok {
+				h.lastMessage = time.Now()
+			}
 			if input, ok := e.item.Data.(inbox.Input); ok && input.Kind == inbox.InputExternal {
+				h.lastMessage = time.Now()
 				if d := h.inputs[string(input.ID)]; d != nil && !d.durable {
 					d.durable = true
 					close(d.done)
@@ -373,9 +381,43 @@ func (h *Headless) Cancel(id string) error {
 	return h.run.runtime.operations.Cancel(operation.ID(id), "User canceled operation")
 }
 
+// CloseIfInactive releases resources without deleting history. The caller must
+// also serialize owner lookup/removal with requests that can acquire this owner.
+// Waiting for permission is not inactivity, nor is a live background operation.
+func (h *Headless) CloseIfInactive(before time.Time) (bool, error) {
+	if !h.actions.TryLock() {
+		return false, nil
+	}
+	defer h.actions.Unlock()
+	h.mu.Lock()
+	eligible := !h.closed && !h.lastMessage.IsZero() && !h.lastMessage.After(before) &&
+		(h.status.State == "idle" || h.status.State == "stopped" || h.status.State == "error") &&
+		h.status.Context.ApprovalID == "" && !h.status.Context.Compacting
+	for _, op := range h.status.Operations {
+		if op.State == "running" || op.State == "canceling" || op.ApprovalID != "" {
+			eligible = false
+		}
+	}
+	for _, input := range h.inputs {
+		if !input.durable {
+			eligible = false
+		}
+	}
+	h.mu.Unlock()
+	if !eligible {
+		return false, nil
+	}
+	return true, h.close()
+}
+
 func (h *Headless) Close() error {
 	h.actions.Lock()
 	defer h.actions.Unlock()
+	return h.close()
+}
+
+// close is called under actions.
+func (h *Headless) close() error {
 	if h.closed {
 		return nil
 	}

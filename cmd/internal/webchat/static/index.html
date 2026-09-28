@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="be">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141816">
-  <title>Unreal · Local agent</title>
+  <title>Unreal · Лакальны агент</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
@@ -13,52 +13,81 @@
   <section id="login" class="login" hidden>
     <form id="login-form" class="login-card">
       <div class="brand"><span class="mark">u</span> unreal</div>
-      <h1>Your workspace,<br>wherever you are.</h1>
-      <p>Enter the access token from your server to continue.</p>
-      <label for="token">Access token</label>
+      <h1>Вашы праекты.<br>Дзе б вы ні былі.</h1>
+      <p>Каб працягнуць, увядзіце токен доступу з сервера.</p>
+      <label for="token">Токен доступу</label>
       <input id="token" type="password" autocomplete="current-password" required>
-      <button class="primary" type="submit">Connect</button>
-      <p id="login-error" role="alert"></p>
+      <button class="primary" type="submit">Увайсці</button>
+      <p id="login-error" class="error" role="alert"></p>
     </form>
   </section>
   <div id="app" class="app" hidden>
-    <aside id="sidebar">
-      <div class="brand"><span class="mark">u</span> unreal <button id="close-sidebar" class="icon mobile" aria-label="Close conversations">×</button></div>
+    <aside id="sidebar" aria-label="Праекты і размовы">
+      <div class="brand"><span class="mark">u</span> unreal <button id="close-sidebar" class="icon mobile" aria-label="Закрыць навігацыю">×</button></div>
       <div class="sidebar-tabs" role="tablist" aria-label="Навігацыя">
-        <button id="tab-projects" role="tab" aria-selected="true" aria-controls="navigation-panel">Праекты</button>
-        <button id="tab-recent" role="tab" aria-selected="false" aria-controls="navigation-panel" tabindex="-1">Апошняе</button>
-        <button id="add-project" class="icon" aria-label="Add workspace" title="Add workspace">+</button>
+        <button id="tab-projects" class="quiet" role="tab" aria-selected="true" aria-controls="navigation-panel">Праекты</button>
+        <button id="tab-recent" class="quiet" role="tab" aria-selected="false" aria-controls="navigation-panel" tabindex="-1">Апошнія</button>
+        <button id="add-project" class="icon" aria-label="Дадаць праект" title="Дадаць праект">+</button>
       </div>
       <div id="navigation-panel" class="navigation-panel" role="tabpanel" aria-labelledby="tab-projects">
-        <section id="pinned-section" aria-label="Pinned">
-          <div class="section-label">Pinned</div>
-          <nav id="pinned" aria-label="Pinned conversations"></nav>
+        <section id="pinned-section" aria-label="Замацаваныя">
+          <div class="section-label">Замацаваныя</div>
+          <nav id="pinned" aria-label="Замацаваныя размовы"></nav>
           <p id="pinned-empty" class="sidebar-empty">Замацуйце размову кнопкай ☆</p>
         </section>
         <div id="folder-header" hidden>
           <button id="back-projects" class="quiet back-projects">← Праекты</button>
           <h2 id="folder-title"></h2>
           <p id="workspace-path" class="muted path"></p>
-          <button id="new-session" class="new-session">＋ New conversation</button>
+          <button id="new-session" class="new-session">＋ Новая размова</button>
         </div>
-        <div id="list-label" class="section-label">ПРАЕКТЫ</div>
+        <div id="list-label" class="section-label">Праекты</div>
         <p id="navigation-warning" class="sidebar-warning" role="status" hidden></p>
-        <nav id="sessions" aria-label="Projects and conversations"></nav>
+        <nav id="sessions" aria-label="Праекты і размовы"></nav>
         <p id="list-empty" class="sidebar-empty" hidden></p>
       </div>
-      <div class="sidebar-footer"><span id="connection" class="connection">Connecting</span><button id="logout" class="quiet">Sign out</button></div>
+      <div class="sidebar-footer"><span id="connection" class="connection" data-state="connecting" role="status">Злучаемся…</span><button id="logout" class="quiet">Выйсці</button></div>
     </aside>
-    <main>
-      <header><button id="open-sidebar" class="icon mobile" aria-label="Open conversations">☰</button><div class="heading"><h1 id="title">Your local workspace</h1><p id="status">Choose a workspace to begin</p></div><button id="release" class="quiet" title="Stop work and release this session for the CLI" hidden>Release</button></header>
+    <main id="main">
+      <header>
+        <button id="open-sidebar" class="icon mobile" aria-label="Адкрыць навігацыю" aria-controls="sidebar" aria-expanded="false">☰</button>
+        <div class="heading"><h1 id="title">Вашы праекты</h1><p id="status" role="status">Выберыце праект, каб пачаць</p></div>
+        <div class="conversation-actions" id="conversation-actions" hidden>
+          <button id="toggle-actions" class="icon" aria-label="Дзеянні з размовай" title="Дзеянні з размовай" aria-expanded="false" aria-controls="conversation-actions-panel">⋯</button>
+          <div id="conversation-actions-panel" class="action-popover" hidden>
+            <button id="delete-session" class="quiet danger">Выдаліць размову…</button>
+          </div>
+        </div>
+      </header>
       <div id="notice" role="alert" hidden></div>
-      <section id="transcript" aria-label="Conversation" tabindex="0"><div class="empty"><span class="eyebrow">LOCAL BY DESIGN</span><h2>A little more room<br>to think.</h2><p>Choose a folder on your machine.<br>Start a conversation, or pick up where you left off.</p><button id="empty-add" class="primary">Add a workspace</button></div></section>
-      <section id="approval" hidden><p>The context needs another compaction. Approve one attempt?</p><button id="approve">Compact once</button><button id="decline" class="quiet">Stop work</button></section>
+      <section id="transcript" aria-label="Размова" tabindex="0"><div class="empty"><span class="eyebrow">НА ВАШЫМ КАМП’ЮТАРЫ</span><h2>Месца для<br>вашых ідэй.</h2><p>Дадайце папку праекта на серверы.<br>Пачніце новую размову або працягніце папярэднюю.</p><button id="empty-add" class="primary">Дадаць праект</button></div></section>
+      <section id="approval" hidden><p>Кантэкст размовы запоўнены. Дазволіць яшчэ адну спробу сціснуць яго, каб працягнуць працу?</p><div class="actions"><button id="decline" class="quiet">Спыніць</button><button id="approve" class="primary">Сціснуць кантэкст</button></div></section>
       <footer class="composer-area">
-        <form id="composer"><label class="sr-only" for="message">Message</label><textarea id="message" rows="3" placeholder="What would you like to work on?" disabled></textarea><div class="composer-actions"><span id="draft-state">Runs on your machine</span><button id="resume" type="button" class="quiet" hidden>Resume work</button><button id="stop" type="button" class="quiet" hidden>Stop</button><button id="send" type="submit" class="primary" disabled>Send ↑</button></div></form>
-        <p class="footnote">Work continues when you leave. Ctrl / ⌘ + Enter to send.</p>
+        <form id="composer">
+          <label class="sr-only" for="message">Паведамленне</label>
+          <textarea id="message" rows="3" placeholder="Над чым будзем працаваць?" disabled></textarea>
+          <div class="actions composer-actions"><span id="draft-state" role="status">Працуе на вашым камп’ютары</span><button id="resume" type="button" class="quiet" hidden>Працягнуць</button><button id="stop" type="button" class="quiet" hidden>Спыніць</button><button id="send" type="submit" class="primary" disabled>Даслаць ↑</button></div>
+        </form>
+        <p class="footnote">Праца працягваецца пасля закрыцця ўкладкі. Ctrl / ⌘ + Enter — даслаць.</p>
       </footer>
     </main>
   </div>
-  <dialog id="project-dialog"><form id="project-form"><h2>Add a workspace</h2><p>Use an existing folder on the machine running Unreal.</p><label for="project-path">Absolute folder path</label><input id="project-path" placeholder="/Users/you/projects/my-project" autocomplete="off" required><p id="project-error" role="alert"></p><div class="dialog-actions"><button id="cancel-project" type="button" class="quiet">Cancel</button><button class="primary">Add workspace</button></div></form></dialog>
+  <dialog id="project-dialog" aria-labelledby="project-heading"><form id="project-form">
+    <h2 id="project-heading">Дадаць праект</h2>
+    <p>Выберыце існуючую папку на камп’ютары, дзе запушчаны Unreal.</p>
+    <label for="project-path">Поўны шлях да папкі</label>
+    <input id="project-path" placeholder="/Users/you/projects/my-project" autocomplete="off" required>
+    <p id="project-error" class="error" role="alert"></p>
+    <div class="actions dialog-actions"><button id="cancel-project" type="button" class="quiet">Скасаваць</button><button class="primary">Дадаць праект</button></div>
+  </form></dialog>
+  <dialog id="delete-dialog" aria-labelledby="delete-heading"><form id="delete-form">
+    <h2 id="delete-heading">Выдаліць размову?</h2>
+    <p id="delete-title"></p>
+    <p>Праца ў гэтай размове спыніцца. Яе лакальная гісторыя і замацаванне будуць выдаленыя. Аднавіць размову праз інтэрфейс будзе немагчыма.</p>
+    <p>Файлы праекта застануцца.</p>
+    <details class="deletion-details"><summary>Што адбываецца з данымі</summary><p>Гэта не поўнае сціранне даных: унутраныя архівы і рэзервовыя копіі могуць захаваць змест. Запыт на выдаленне ў OpenAI не дасылаецца.</p></details>
+    <p id="delete-error" class="error" role="alert"></p>
+    <div class="actions dialog-actions"><button id="cancel-delete" type="button" class="quiet">Скасаваць</button><button id="confirm-delete" class="danger">Выдаліць лакальна</button></div>
+  </form></dialog>
 </body>
 </html>

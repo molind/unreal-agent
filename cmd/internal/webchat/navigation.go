@@ -131,6 +131,16 @@ func (s *Server) navigation(w http.ResponseWriter, r *http.Request) {
 		}
 		result.Projects = append(result.Projects, item)
 	}
+	// Ignore stale pins after a deletion even if the separate pins file could
+	// not be written. Keep pins for unavailable projects so they can recover.
+	result.Pinned = slices.DeleteFunc(result.Pinned, func(ref sessionRef) bool {
+		for _, p := range result.Projects {
+			if p.ID == ref.Project && p.Error == "" {
+				return !slices.ContainsFunc(p.Sessions, func(info sessionInfo) bool { return info.ID == ref.Session })
+			}
+		}
+		return false
+	})
 	slices.SortFunc(result.Projects, func(a, b projectNavigation) int {
 		if c := b.Updated.Compare(a.Updated); c != 0 {
 			return c
@@ -149,54 +159,58 @@ func (s *Server) pinSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := s.project(r)
-	if err == nil && body.Pinned {
-		p.mu.Lock()
-		err = s.open(p)
-		if err == nil {
-			_, err = p.store.Inspect(r.Context(), session.ID(r.PathValue("session")))
-		}
-		p.mu.Unlock()
-	}
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	ref := sessionRef{Project: p.ID, Session: r.PathValue("session")}
-	err = func() error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.closed {
-			return errors.New("server is shutting down")
-		}
-		pins := make([]sessionRef, 0, len(s.pins)+1)
-		for _, old := range s.pins {
-			if old != ref {
-				pins = append(pins, old)
+	if err == nil {
+		err = func() error {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if body.Pinned {
+				if err := s.open(p); err != nil {
+					return err
+				}
+				if _, err := p.store.Inspect(r.Context(), session.ID(r.PathValue("session"))); err != nil {
+					return err
+				}
 			}
-		}
-		if body.Pinned {
-			if slices.Contains(s.pins, ref) {
-				return nil
-			}
-			pins = append([]sessionRef{ref}, pins...)
-		}
-		data, err := json.MarshalIndent(pins, "", "  ")
-		if err == nil {
-			err = writePrivate(filepath.Join(s.config.StateDirectory, "pins.json"), data)
-		}
-		if err != nil {
-			return err
-		}
-		s.pins = pins
-		close(s.changed)
-		s.changed = make(chan struct{})
-		return nil
-	}()
+			return s.setPinned(sessionRef{Project: p.ID, Session: r.PathValue("session")}, body.Pinned)
+		}()
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	respond(w, map[string]bool{"pinned": body.Pinned})
+}
+
+// Callers hold p.mu to serialize the existence check with deletion.
+func (s *Server) setPinned(ref sessionRef, pinned bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("server is shutting down")
+	}
+	if slices.Contains(s.pins, ref) == pinned {
+		return nil
+	}
+	pins := make([]sessionRef, 0, len(s.pins)+1)
+	for _, old := range s.pins {
+		if old != ref {
+			pins = append(pins, old)
+		}
+	}
+	if pinned {
+		pins = append([]sessionRef{ref}, pins...)
+	}
+	data, err := json.MarshalIndent(pins, "", "  ")
+	if err == nil {
+		err = writePrivate(filepath.Join(s.config.StateDirectory, "pins.json"), data)
+	}
+	if err != nil {
+		return err
+	}
+	s.pins = pins
+	close(s.changed)
+	s.changed = make(chan struct{})
+	return nil
 }
 
 // Cache only the append-only history projection. SQL's updated timestamp also

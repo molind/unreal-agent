@@ -56,23 +56,26 @@ type workspace struct {
 	store     *localfile.Store
 	release   func() error
 	owners    map[string]*chat.Headless
+	inFlight  map[string]int // Owner references held by HTTP actions; protected by mu.
 	summaries map[string]*sessionSummary
 }
 
 type Server struct {
-	config       Config
-	ctx          context.Context
-	cancel       context.CancelFunc
-	mu           sync.Mutex
-	projects     map[string]*workspace
-	pins         []sessionRef
-	navigationMu sync.Mutex // Serialize catalog scans across connected browsers.
-	changed      chan struct{}
-	closed       bool
-	lock         *os.File
-	token        string
-	safe         func(string) string
-	handler      http.Handler
+	config          Config
+	ctx             context.Context
+	cancel          context.CancelFunc
+	mu              sync.Mutex
+	projects        map[string]*workspace
+	pins            []sessionRef
+	navigationMu    sync.Mutex // Serialize catalog scans across connected browsers.
+	changed         chan struct{}
+	closed          bool
+	lock            *os.File
+	token           string
+	safe            func(string) string
+	handler         http.Handler
+	maintenanceStop chan struct{}
+	maintenanceDone chan struct{}
 }
 
 func New(c Config) (_ *Server, result error) {
@@ -160,11 +163,14 @@ func New(c Config) (_ *Server, result error) {
 	mux.HandleFunc("POST /api/projects/{project}/sessions", s.createSession)
 	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/pin", s.pinSession)
 	mux.HandleFunc("GET /api/projects/{project}/sessions/{session}", s.history)
+	mux.HandleFunc("DELETE /api/projects/{project}/sessions/{session}", s.deleteSession)
 	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/{action}", s.action)
 	mux.HandleFunc("GET /api/events", s.events)
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /", http.FileServer(http.FS(static)))
 	s.handler = s.guard(mux)
+	s.maintenanceStop, s.maintenanceDone = make(chan struct{}), make(chan struct{})
+	go s.maintain()
 	return s, nil
 }
 
@@ -456,7 +462,7 @@ func (s *Server) sessions(ctx context.Context, p *workspace) ([]sessionInfo, err
 			return nil, err
 		}
 		if x.Title == "" {
-			x.Title = "New conversation"
+			x.Title = "Новая размова"
 		}
 		if owner := p.owners[x.ID]; owner != nil {
 			x.State = owner.State()
@@ -544,6 +550,46 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	respond(w, map[string]any{"items": items, "after": page.NextAfter, "more": page.More, "status": status})
 }
 
+func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
+	p, err := s.project(r)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	id := r.PathValue("session")
+	var warning string
+	err = func() error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if err := s.open(p); err != nil {
+			return err
+		}
+		if owner := p.owners[id]; owner != nil {
+			err := owner.Close() // Join all model/tool work before dropping history.
+			delete(p.owners, id)
+			if err != nil {
+				return err
+			}
+		}
+		if err := p.store.DeleteSession(r.Context(), session.ID(id)); err != nil {
+			return err
+		}
+		delete(p.summaries, id)
+		if err := s.setPinned(sessionRef{Project: p.ID, Session: id}, false); err != nil {
+			// The database commit has succeeded. Never report a failed deletion
+			// that invites the user to keep editing an already deleted session.
+			warning = "Размова выдаленая, але не ўдалося захаваць спіс замацаваных: " + s.safe(err.Error())
+		}
+		return nil
+	}()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.signal()
+	respond(w, map[string]any{"deleted": true, "warning": warning})
+}
+
 func (s *Server) readPage(ctx context.Context, p *workspace, id string, after sessionstore.Sequence) (sessionstore.Page, chat.HeadlessStatus, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -558,23 +604,35 @@ func (s *Server) readPage(ctx context.Context, p *workspace, id string, after se
 	return page, status, err
 }
 
-func (s *Server) owner(p *workspace, id string) (*chat.Headless, error) {
+func (s *Server) acquireOwner(p *workspace, id string) (*chat.Headless, func(), error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := s.checkOpen(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if owner := p.owners[id]; owner != nil {
-		return owner, nil
+	owner := p.owners[id]
+	if owner == nil {
+		args := append([]string{}, s.config.ChatArgs...)
+		args = append(args, "-session", id, p.Path)
+		var err error
+		owner, err = chat.OpenHeadless(s.ctx, args, s.config.Getenv, s.config.Providers, s.signal)
+		if err != nil {
+			return nil, nil, err
+		}
+		p.owners[id] = owner
 	}
-	args := append([]string{}, s.config.ChatArgs...)
-	args = append(args, "-session", id, p.Path)
-	owner, err := chat.OpenHeadless(s.ctx, args, s.config.Getenv, s.config.Providers, s.signal)
-	if err != nil {
-		return nil, err
+	if p.inFlight == nil {
+		p.inFlight = make(map[string]int)
 	}
-	p.owners[id] = owner
-	return owner, nil
+	p.inFlight[id]++
+	return owner, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.inFlight[id]--
+		if p.inFlight[id] == 0 {
+			delete(p.inFlight, id)
+		}
+	}, nil
 }
 
 func (s *Server) action(w http.ResponseWriter, r *http.Request) {
@@ -605,9 +663,10 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 		}
 		p.mu.Unlock()
 	} else {
-		owner, e := s.owner(p, id)
+		owner, done, e := s.acquireOwner(p, id)
 		err = e
 		if err == nil {
+			defer done()
 			switch action {
 			case "send":
 				ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -680,7 +739,13 @@ func (s *Server) Close() error {
 		projects = append(projects, p)
 	}
 	close(s.changed)
+	if s.maintenanceStop != nil {
+		close(s.maintenanceStop)
+	}
 	s.mu.Unlock()
+	if s.maintenanceDone != nil {
+		<-s.maintenanceDone
+	}
 	// SSE handlers also observe this context; runtime shutdown below uses stop
 	// first, then cancellation as the final resource cleanup.
 	var result error
