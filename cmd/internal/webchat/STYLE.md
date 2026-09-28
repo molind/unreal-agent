@@ -51,7 +51,11 @@ comes first; the committing action comes last. Layout classes must not restyle
 buttons. On mobile, the composer hint gets a separate row, not smaller text.
 
 The conversation header contains title/status and a single `⋯` disclosure button.
-`conversation-actions` anchors `action-popover`, which contains **Выдаліць размову…**.
+`conversation-actions` anchors the vertically stacked `action-popover`: first
+**Перайменаваць…**, then **Выдаліць размову…**. Opening it focuses the first action.
+Renaming uses the shared dialog/form styles, prefills and selects the current
+name, and offers **Скасаваць** / **Захаваць**. Keep typed names intact on errors
+and live updates; bind submission to the conversation that opened the dialog.
 The disclosure has `aria-expanded`/`aria-controls`, closes on Escape, outside click
 or focus leaving the group, and returns focus appropriately. It is a disclosure,
 not an ARIA menu requiring arrow-key navigation. There is no manual Release button:

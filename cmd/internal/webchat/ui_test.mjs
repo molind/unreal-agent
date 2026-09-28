@@ -26,15 +26,23 @@ window.fixture = { projects: [{ id:'project', name:'Дэманстрацыйны
   {id:'first',title:'Праверка паслядоўнасці web UI з доўгай назвай размовы',state:'working',updated:'2026-05-01T12:00:00Z'},
   {id:'second',title:'Другая размова',state:'saved',updated:'2026-05-01T11:00:00Z'}
 ]}], pinned:[], warnings:[] };
+window.autoTitles = Object.fromEntries(fixture.projects[0].sessions.map(s => [s.id,s.title]));
 window.fixtureStatus = {state:'working',operations:[],context:{EstimatedTokens:2048}};
 window.fetch = async (url, options = {}) => {
   const body = options.body && JSON.parse(options.body);
   if (options.method) {
     requests.push({url,body,method:options.method});
     if (apiDelay) await new Promise(r => setTimeout(r,apiDelay));
+    if (window.holdRename && url.endsWith('/rename')) await new Promise(r => { window.releaseRename = r; });
     if (failNext) { failNext = false; throw new TypeError('offline'); }
     if (url.endsWith('/stop')) fixtureStatus.state = 'stopped';
     if (url.endsWith('/resume')) fixtureStatus.state = 'working';
+    if (url.endsWith('/rename')) {
+      const session = fixture.projects[0].sessions.find(s => url.endsWith('/'+s.id+'/rename'));
+      if (!session) return {ok:false,status:404,text:async()=> 'conversation no longer exists'};
+      session.title = body.title.trim().replace(/\\s+/gu,' ') || autoTitles[session.id];
+      return {ok:true,json:async()=>({renamed:true})};
+    }
     if (options.method === 'DELETE') fixture.projects[0].sessions = fixture.projects[0].sessions.filter(s => !url.endsWith('/'+s.id));
     return {ok:true,json:async()=>({deleted:true})};
   }
@@ -103,9 +111,9 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
         await fits();
 
         // Common text button geometry, including dynamically generated controls.
-        const styles = await evaluate(`['stop','send','delete-session','confirm-delete'].map(id=>{const s=getComputedStyle($(id));return [s.fontSize,s.fontWeight,s.padding,s.minHeight]})`);
+        const styles = await evaluate(`['stop','send','rename-session','confirm-rename','delete-session','confirm-delete'].map(id=>{const s=getComputedStyle($(id));return [s.fontSize,s.fontWeight,s.padding,s.minHeight]})`);
         for (const style of styles) assert.deepEqual(style,['13px','500','8px 12px',width<761?'44px':'36px']);
-        assert.deepEqual(await evaluate(`['login-error','project-error','delete-error'].map(id=>getComputedStyle($(id)).color)`),Array(3).fill('rgb(240, 167, 157)'));
+        assert.deepEqual(await evaluate(`['login-error','project-error','rename-error','delete-error'].map(id=>getComputedStyle($(id)).color)`),Array(4).fill('rgb(240, 167, 157)'));
         await evaluate(`$('message').focus()`);
         assert.equal(await evaluate(`getComputedStyle($('message')).outlineStyle`),'solid');
         const connected = await evaluate(`connection('connected');getComputedStyle($('connection'),'::before').backgroundColor`);
@@ -115,7 +123,7 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
 
         // Disclosure and destructive confirmation remain keyboard reachable.
         await evaluate(`$('toggle-actions').click()`);
-        assert.equal(await evaluate(`document.activeElement.id`),'delete-session');
+        assert.equal(await evaluate(`document.activeElement.id`),'rename-session');
         await key('Escape');
         assert.equal(await evaluate(`document.activeElement.id`),'toggle-actions');
         await evaluate(`$('toggle-actions').click();$('delete-session').click()`);
@@ -123,6 +131,45 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
         await fits();
         await evaluate(`$('cancel-delete').click()`);
         assert.equal(await evaluate(`document.activeElement.id`),'toggle-actions');
+
+        // Renaming is a metadata edit: preserve draft/history and target identity.
+        await evaluate(`$('message').value='Чарнавік перад перайменаваннем';$('message').dispatchEvent(new Event('input'));$('toggle-actions').click();$('rename-session').click()`);
+        assert.equal(await evaluate(`$('rename-title').value === $('title').textContent && document.activeElement.id==='rename-title' && $('rename-title').selectionStart===0 && $('rename-title').selectionEnd===$('rename-title').value.length`),true);
+        await fits();
+        if (process.env.UI_SCREENSHOTS) {
+          const shot = await run('Page.captureScreenshot',{format:'png'});
+          writeFileSync(join(process.env.UI_SCREENSHOTS,`rename-${width}.png`),Buffer.from(shot.data,'base64'));
+        }
+        await evaluate(`$('rename-title').value='🚀'.repeat(201);$('rename-form').requestSubmit()`);
+        assert.equal(await evaluate(`$('rename-error').textContent.includes('200') && !state.renaming && !requests.some(r=>r.url.endsWith('/rename'))`),true);
+        await key('Escape');
+        assert.equal(await evaluate(`!$('rename-dialog').open && document.activeElement.id==='toggle-actions'`),true);
+        await evaluate(`window.renameText='Аптымізацыя web UI 🚀';$('toggle-actions').click();$('rename-session').click();$('rename-title').value=renameText;failNext=true;holdRename=true;$('rename-form').requestSubmit();$('rename-form').requestSubmit()`);
+        assert.deepEqual(await evaluate(`[$('confirm-rename').disabled,$('rename-title').readOnly,$('confirm-rename').textContent]`),[true,true,'Захоўваем…']);
+        await key('Escape');
+        assert.deepEqual(await evaluate(`[$('rename-dialog').open,state.renaming]`),[true,true]);
+        await evaluate(`holdRename=false;releaseRename()`);
+        await wait(`!state.renaming && $('rename-error').textContent`);
+        assert.equal(await evaluate(`$('rename-title').value===renameText && requests.filter(r=>r.url.endsWith('/rename')).length===1`),true);
+        await evaluate(`$('rename-form').requestSubmit()`);
+        await wait(`!state.renaming && !$('rename-dialog').open && $('title').textContent===renameText`);
+        assert.equal(await evaluate(`$('message').value==='Чарнавік перад перайменаваннем' && document.querySelectorAll('.message').length===2 && state.status.state==='working'`),true);
+        await evaluate(`changeTab('recent')`);
+        assert.equal(await evaluate(`document.querySelector('#sessions .row-title').textContent`),'Аптымізацыя web UI 🚀');
+        await evaluate(`fixture.pinned=[{project:'project',session:'first'}];refresh()`);
+        assert.equal(await evaluate(`document.querySelector('#pinned .row-title').textContent`),'Аптымізацыя web UI 🚀');
+        await evaluate(`openFolder('project')`);
+        assert.equal(await evaluate(`document.querySelector('#sessions .row-title').textContent`),'Аптымізацыя web UI 🚀');
+        await evaluate(`$('toggle-actions').click();$('rename-session').click();$('rename-title').value='Мая яшчэ не захаваная назва';fixture.projects[0].sessions[0].title='<b>Назва з іншага браўзера</b>';refresh()`);
+        assert.equal(await evaluate(`$('title').textContent==='<b>Назва з іншага браўзера</b>' && !$('title').querySelector('b') && $('rename-title').value==='Мая яшчэ не захаваная назва'`),true);
+        await evaluate(`selectSession('second','project')`);
+        await evaluate(`$('rename-form').requestSubmit()`);
+        await wait(`!state.renaming && !$('rename-dialog').open`);
+        assert.equal(await evaluate(`requests.filter(r=>r.url.endsWith('/rename')).at(-1).url.endsWith('/first/rename') && fixture.projects[0].sessions[1].title===autoTitles.second`),true);
+        await evaluate(`selectSession('first','project')`);
+        await evaluate(`$('toggle-actions').click();$('rename-session').click();$('rename-title').value='';$('rename-form').requestSubmit()`);
+        await wait(`!state.renaming && $('title').textContent===autoTitles.first`);
+        await evaluate(`fixture.pinned=[];changeTab('projects');refresh()`);
 
         if (width<761) {
           await evaluate(`$('open-sidebar').click()`);
@@ -179,6 +226,13 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
         await wait(`!state.deleting && !state.session`);
         assert.equal(await evaluate(`localStorage.getItem('unreal.draft.project.first')`),null);
         assert.equal(await evaluate(`fixture.projects[0].sessions[0].id`),'second');
+        // A deletion from another browser cannot redirect/resurrect a rename.
+        await evaluate(`selectSession('second','project')`);
+        await evaluate(`$('toggle-actions').click();$('rename-session').click();$('rename-title').value='Не губляць назву';fixture.projects[0].sessions=[];refresh()`);
+        await evaluate(`$('rename-form').requestSubmit()`);
+        await wait(`!state.renaming && $('rename-error').textContent.includes('выдаленая')`);
+        assert.equal(await evaluate(`$('rename-dialog').open && $('rename-title').value==='Не губляць назву' && state.session===''`),true);
+        await evaluate(`$('cancel-rename').click()`);
         await call('Target.closeTarget',{targetId});
       });
     }

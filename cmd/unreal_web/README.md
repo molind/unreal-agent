@@ -87,6 +87,14 @@ and [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve).
   Pinned appears above both root tabs; it is hidden inside a project folder.
   Pinned conversations are omitted from the remaining Recent list, but still
   appear in their project. Pinning or browsing never starts agent work.
+- Choose **⋯ → Перайменаваць…** to give a conversation a custom title (up to
+  200 Unicode characters). The dialog starts with the current title; **Захаваць**
+  persists it in the workspace SQLite database. All browsers see the new title
+  in the header, project/recent lists and pins, including after restart. Empty
+  input restores the automatic title from the first message (or **Новая размова**
+  for an empty conversation). Renaming never starts/stops agent work, changes
+  history, resets the idle timer, or moves the conversation in recent order.
+  Titles are display metadata, not instructions sent to the model.
 - Open a conversation and choose **⋯ → Выдаліць размову…**, then **Выдаліць лакальна** to
   delete it. The server stops and joins its work, removes the indexed history,
   operation checkpoints and diagnostics, and unpins it. A session owned by a
@@ -200,6 +208,7 @@ have bounded write deadlines and never block runtime event consumption.
 
 The API has project registration/listing, idempotent session creation by UUID,
 session listing/history, `DELETE /api/projects/{project}/sessions/{session}`,
+`POST /api/projects/{project}/sessions/{session}/rename` with `{"title":"…"}`,
 and explicit `send`, `resume`, `stop`, `compact`, `cancel`, `permit` and `deny`
 actions. The `release` endpoint remains for compatibility with older clients;
 the current UI uses automatic idle cleanup instead. Runtime lifetime belongs to

@@ -162,6 +162,7 @@ func New(c Config) (_ *Server, result error) {
 	mux.HandleFunc("GET /api/projects/{project}/sessions", s.listSessions)
 	mux.HandleFunc("POST /api/projects/{project}/sessions", s.createSession)
 	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/pin", s.pinSession)
+	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/rename", s.renameSession)
 	mux.HandleFunc("GET /api/projects/{project}/sessions/{session}", s.history)
 	mux.HandleFunc("DELETE /api/projects/{project}/sessions/{session}", s.deleteSession)
 	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/{action}", s.action)
@@ -452,6 +453,10 @@ func (s *Server) sessions(ctx context.Context, p *workspace) ([]sessionInfo, err
 	if err != nil {
 		return nil, err
 	}
+	titles, err := p.store.SessionTitles(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if p.summaries == nil {
 		p.summaries = make(map[string]*sessionSummary)
 	}
@@ -460,6 +465,9 @@ func (s *Server) sessions(ctx context.Context, p *workspace) ([]sessionInfo, err
 		x, err := s.sessionSummary(ctx, p, row)
 		if err != nil {
 			return nil, err
+		}
+		if title := titles[row.ID]; title != "" {
+			x.Title = s.safe(title)
 		}
 		if x.Title == "" {
 			x.Title = "Новая размова"

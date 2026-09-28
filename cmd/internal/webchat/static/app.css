@@ -846,6 +846,10 @@ button.pin-button[aria-pressed="true"] {
 }
 
 .action-popover {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
   position: absolute;
   right: 0;
   top: calc(100% + var(--space-2));

@@ -9,6 +9,7 @@ const state = {
   navigationRows: new Map(), pins: [], warnings: [],
   tab: saved('tab', 'projects'), folder: saved('folder'),
   deleteTarget: null, deleting: false,
+  renameTarget: null, renaming: false,
 };
 const plural = new Intl.PluralRules('be');
 const operationLabels = { running: 'Выконваецца', canceling: 'Спыняецца', completed: 'Завершана', failed: 'Памылка', canceled: 'Скасавана', 'awaiting permission': 'Чакае дазволу' };
@@ -45,7 +46,7 @@ function sidebar(open) {
 function actionMenu(open, focus = false) {
   $('conversation-actions-panel').hidden = !open;
   $('toggle-actions').setAttribute('aria-expanded', String(open));
-  if (focus) $(open ? 'delete-session' : 'toggle-actions').focus();
+  if (focus) $(open ? 'rename-session' : 'toggle-actions').focus();
 }
 
 function newID() {
@@ -73,6 +74,9 @@ function errorText(text) {
     'session is not running': 'Праца ў гэтай размове не запушчаная.',
     'compaction request is no longer pending': 'Запыт на сцісканне кантэксту ўжо неактуальны.',
     'message ID already belongs to different text': 'Гэтае паведамленне ўжо дасланае з іншым тэкстам.',
+    'session title is required': 'Увядзіце назву размовы або пакіньце поле пустым для аўтаматычнай назвы.',
+    'session title must be at most 200 characters without control characters': 'Назва можа змяшчаць да 200 сімвалаў без кіравальных знакаў.',
+    'conversation no longer exists': 'Размова ўжо выдаленая. Выберыце іншую.',
   };
   return known[text] || ('Не ўдалося выканаць дзеянне.' + (text ? '\nТэхнічныя звесткі: ' + text : ''));
 }
@@ -538,6 +542,49 @@ $('new-session').addEventListener('click', async () => {
   } catch (error) { notice(error.message); } finally { state.creating = false; renderSessions(); }
 });
 for (const action of ['stop', 'resume']) $(action).addEventListener('click', () => sessionAction(action));
+$('rename-session').addEventListener('click', () => {
+  if (!state.session || state.renaming) return;
+  actionMenu(false, true);
+  state.renameTarget = { project: state.project, session: state.session };
+  $('rename-title').value = $('title').textContent;
+  $('rename-error').textContent = '';
+  $('rename-dialog').showModal(); $('rename-title').focus(); $('rename-title').select();
+});
+$('cancel-rename').addEventListener('click', () => { state.renameTarget = null; $('rename-dialog').close(); });
+$('rename-dialog').addEventListener('cancel', event => {
+  if (state.renaming) event.preventDefault(); else state.renameTarget = null;
+});
+$('rename-dialog').addEventListener('keydown', event => {
+  // Repeated Escape can bypass a native dialog's cancel event in some browsers.
+  if (event.key === 'Escape' && state.renaming) event.preventDefault();
+});
+$('rename-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (state.renaming || !state.renameTarget) return;
+  const title = $('rename-title').value;
+  if ([...title.trim().replace(/\s+/gu, ' ')].length > 200) {
+    $('rename-error').textContent = 'Назва можа змяшчаць да 200 сімвалаў.';
+    $('rename-title').focus(); return;
+  }
+  // Keep the target captured when the dialog opened, even if live updates or
+  // another pending action switch/delete the selected conversation meanwhile.
+  const target = state.renameTarget;
+  state.renaming = true;
+  $('confirm-rename').disabled = true; $('cancel-rename').disabled = true; $('rename-title').readOnly = true;
+  $('confirm-rename').textContent = 'Захоўваем…'; $('rename-error').textContent = '';
+  try {
+    await api('projects/' + target.project + '/sessions/' + target.session + '/rename', { title });
+    if (state.renameTarget === target) { state.renameTarget = null; $('rename-dialog').close(); }
+    if (state.project === target.project && state.session === target.session) notice('Назва размовы захаваная.');
+    scheduleRefresh();
+  } catch (error) {
+    if (state.renameTarget === target) $('rename-error').textContent = error.message;
+  } finally {
+    state.renaming = false;
+    $('confirm-rename').disabled = false; $('cancel-rename').disabled = false; $('rename-title').readOnly = false;
+    $('confirm-rename').textContent = 'Захаваць';
+  }
+});
 $('delete-session').addEventListener('click', () => {
   if (!state.session) return;
   actionMenu(false, true);

@@ -25,6 +25,9 @@ func (s *Store) DeleteSession(ctx context.Context, id session.ID) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "DELETE FROM metadata WHERE namespace=? AND key=?", sessionTitleNamespace, id); err != nil {
+		return err
+	}
 	for _, query := range []string{
 		"DELETE FROM diagnostics WHERE session=?",
 		"DELETE FROM operations WHERE session=?",

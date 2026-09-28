@@ -133,10 +133,18 @@ deduplication, FTS search and standalone single-session database export are not
 part of this first version. `history SESSION` exports a session's JSONL transcript;
 `backup FILE` includes the entire workspace database, including other sessions.
 
+Custom conversation titles use the existing `metadata` table with namespace
+`session-title` and the session ID as the key. They are display-only: renaming
+neither appends a history event nor updates the session activity timestamp.
+Titles are shared across readers, included in database backups, and independent
+of runtime leases. Empty titles remove the override. Forks derive their own titles;
+transcript-only JSONL exports do not include this UI metadata.
+
 The web UI can explicitly delete a session through `localfile.DeleteSession`.
 It requires the session lease and transactionally removes its `sessions`, `events`,
-`operations` and `diagnostics` rows. Immutable artifacts, captures, file-tool
-receipts, migration archives and copies in forks/backups remain. This removes
+`operations` and `diagnostics` rows, plus its custom title metadata. Immutable
+artifacts, captures, file-tool receipts, migration archives and copies in
+forks/backups remain. This removes
 the conversation from normal listing/replay; it is not secure content erasure.
 Keeping shared immutable artifacts also preserves concurrent readers that hydrate
 references after releasing their SQL snapshot.

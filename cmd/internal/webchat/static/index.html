@@ -55,6 +55,7 @@
         <div class="conversation-actions" id="conversation-actions" hidden>
           <button id="toggle-actions" class="icon" aria-label="Дзеянні з размовай" title="Дзеянні з размовай" aria-expanded="false" aria-controls="conversation-actions-panel">⋯</button>
           <div id="conversation-actions-panel" class="action-popover" hidden>
+            <button id="rename-session" class="quiet">Перайменаваць…</button>
             <button id="delete-session" class="quiet danger">Выдаліць размову…</button>
           </div>
         </div>
@@ -79,6 +80,14 @@
     <input id="project-path" placeholder="/Users/you/projects/my-project" autocomplete="off" required>
     <p id="project-error" class="error" role="alert"></p>
     <div class="actions dialog-actions"><button id="cancel-project" type="button" class="quiet">Скасаваць</button><button class="primary">Дадаць праект</button></div>
+  </form></dialog>
+  <dialog id="rename-dialog" aria-labelledby="rename-heading"><form id="rename-form">
+    <h2 id="rename-heading">Перайменаваць размову</h2>
+    <label for="rename-title">Назва размовы</label>
+    <input id="rename-title" autocomplete="off" aria-describedby="rename-hint rename-error">
+    <p id="rename-hint">Да 200 сімвалаў. Пустое поле верне аўтаматычную назву з першага паведамлення. Гісторыя і праца агента не зменяцца.</p>
+    <p id="rename-error" class="error" role="alert"></p>
+    <div class="actions dialog-actions"><button id="cancel-rename" type="button" class="quiet">Скасаваць</button><button id="confirm-rename" class="primary">Захаваць</button></div>
   </form></dialog>
   <dialog id="delete-dialog" aria-labelledby="delete-heading"><form id="delete-form">
     <h2 id="delete-heading">Выдаліць размову?</h2>
