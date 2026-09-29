@@ -69,6 +69,10 @@ type ContextRecovery struct {
 }
 
 type Settings struct {
+	// Model, when set, replaces the model and effort atomically. Empty effort
+	// then means provider default (omit reasoning), not the previous effort.
+	// An omitted model retains compatibility with historical effort-only events.
+	Model           string              `json:",omitzero"`
 	ReasoningEffort llm.ReasoningEffort `json:",omitzero"`
 }
 
@@ -114,8 +118,12 @@ func (input Input) DecodeControlMessage() (ControlMessage, error) {
 		if err := json.Unmarshal(envelope.Parameters, &settings, json.RejectUnknownMembers(true)); err != nil {
 			return ControlMessage{}, fmt.Errorf("decode settings parameters: %w", err)
 		}
-		if !settings.ReasoningEffort.Valid() {
-			return ControlMessage{}, fmt.Errorf("unsupported reasoning effort %q", settings.ReasoningEffort)
+		if settings.Model == "" {
+			if !settings.ReasoningEffort.Valid() {
+				return ControlMessage{}, fmt.Errorf("unsupported reasoning effort %q", settings.ReasoningEffort)
+			}
+		} else if !llm.ValidModelID(settings.Model) || (settings.ReasoningEffort != "" && !settings.ReasoningEffort.ValidValue()) {
+			return ControlMessage{}, fmt.Errorf("invalid model settings")
 		}
 		request.Parameters = settings
 	default:

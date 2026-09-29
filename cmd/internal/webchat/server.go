@@ -164,6 +164,8 @@ func New(c Config) (_ *Server, result error) {
 	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/pin", s.pinSession)
 	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/rename", s.renameSession)
 	mux.HandleFunc("GET /api/projects/{project}/sessions/{session}", s.history)
+	mux.HandleFunc("GET /api/projects/{project}/sessions/{session}/models", s.models)
+	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/settings", s.modelSettings)
 	mux.HandleFunc("DELETE /api/projects/{project}/sessions/{session}", s.deleteSession)
 	mux.HandleFunc("POST /api/projects/{project}/sessions/{session}/{action}", s.action)
 	mux.HandleFunc("GET /api/events", s.events)

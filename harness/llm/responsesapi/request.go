@@ -41,7 +41,7 @@ func requestBody(request llm.Request, promptCacheKey string, extensions map[stri
 		params.MaxOutputTokens = &maxOutputTokens
 	}
 	if request.Model.ReasoningEffort != "" {
-		if !request.Model.ReasoningEffort.Valid() {
+		if !request.Model.ReasoningEffort.ValidValue() {
 			return nil, fmt.Errorf("unsupported reasoning effort %q", request.Model.ReasoningEffort)
 		}
 		effort := openaiapi.ReasoningEffort(request.Model.ReasoningEffort)

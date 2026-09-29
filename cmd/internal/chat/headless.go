@@ -14,6 +14,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/cmd/internal/agentrunner"
 	"github.com/unreallabsai/unreal-agent/harness/contextbuilder"
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
+	"github.com/unreallabsai/unreal-agent/harness/llm"
 	"github.com/unreallabsai/unreal-agent/harness/operation"
 	"github.com/unreallabsai/unreal-agent/harness/session"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
@@ -40,6 +41,11 @@ type Headless struct {
 	status                  HeadlessStatus
 	lastMessage             time.Time // Under mu; opening an owner starts a fresh grace period.
 	inputs                  map[string]*delivery
+	modelChoices            []llm.ModelOption // Under actions.
+	modelsFetched           time.Time
+	modelsWarning           string
+	settingsID              inbox.ID // Pending durable receipt; under mu.
+	settingsSaved           chan struct{}
 }
 
 type headlessRun struct {
@@ -56,6 +62,7 @@ type delivery struct {
 }
 
 type HeadlessStatus struct {
+	ModelSettings
 	State      string                `json:"state"`
 	Error      string                `json:"error,omitempty"`
 	Warning    string                `json:"warning,omitempty"`
@@ -114,6 +121,14 @@ func OpenHeadless(ctx context.Context, args []string, getenv func(string) string
 		}
 		after = page.NextAfter
 	}
+	selected, err := savedModelSettings(ctx, s, session.ID(c.session))
+	if err != nil {
+		return nil, err
+	}
+	if selected.Model != "" {
+		h.config.model, h.config.effort = selected.Model, string(selected.ReasoningEffort)
+	}
+	h.status.ModelSettings = ModelSettings{h.config.model, llm.ReasoningEffort(h.config.effort)}
 	return h, nil
 }
 
@@ -201,6 +216,12 @@ func (h *Headless) observe(run *headlessRun) {
 			}
 		}
 		if e.item != nil {
+			if input, ok := e.item.Data.(inbox.Input); ok && input.ID == h.settingsID && h.settingsSaved != nil {
+				select {
+				case h.settingsSaved <- struct{}{}:
+				default:
+				}
+			}
 			// Record activity with the status update: a just-completed reply must
 			// not be reaped using an older history/sidebar timestamp.
 			if _, ok := e.item.Data.(sessionstore.ModelResponse); ok {

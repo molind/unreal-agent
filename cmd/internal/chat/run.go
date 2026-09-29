@@ -453,8 +453,25 @@ func (a *application) announce() error {
 	if id == "" {
 		id = "(unsaved; first message saves)"
 	}
-	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\n", id, a.config.workspace, a.config.provider, a.config.model, a.config.effort)
+	model, effort := a.config.model, a.config.effort
+	if a.id != "" {
+		selected, err := savedModelSettings(a.ctx, a.store, a.id)
+		if err != nil {
+			return err
+		}
+		if selected.Model != "" {
+			model, effort = selected.Model, string(selected.ReasoningEffort)
+		}
+	}
+	if effort == "" {
+		effort = "provider default"
+	}
+	text := fmt.Sprintf("Session: %s\nWorkspace: %s\nProvider: %s | Model: %s | Reasoning effort: %s\n", id, a.config.workspace, a.config.provider, model, effort)
 	if a.display.ui != nil {
+		a.display.promptInfo = a.display.safe(fmt.Sprintf("%s / %s | %s | /help", model, effort, filepath.Base(a.config.workspace)))
+		if err := a.display.updatePrompt(); err != nil {
+			return err
+		}
 		return a.display.write("\n" + paint(a.display.color, "1", "  unreal chat") + "\n" + paint(a.display.color, "2", a.display.safe(text)) + "\n")
 	}
 	return a.display.print("%s", text)

@@ -321,9 +321,9 @@ func TestRequestBodyEncodesReasoningEffort(t *testing.T) {
 
 func TestRequestBodyRejectsUnsupportedReasoningEffort(t *testing.T) {
 	_, err := requestBody(llm.Request{
-		Model: llm.Model{ID: "gpt-test", ReasoningEffort: "maximum"},
+		Model: llm.Model{ID: "gpt-test", ReasoningEffort: "bad value"},
 	}, "", nil)
-	if err == nil || err.Error() != `unsupported reasoning effort "maximum"` {
+	if err == nil || err.Error() != `unsupported reasoning effort "bad value"` {
 		t.Fatalf("error = %v", err)
 	}
 }

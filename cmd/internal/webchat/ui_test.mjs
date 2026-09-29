@@ -27,7 +27,12 @@ window.fixture = { projects: [{ id:'project', name:'Дэманстрацыйны
   {id:'second',title:'Другая размова',state:'saved',updated:'2026-05-01T11:00:00Z'}
 ]}], pinned:[], warnings:[] };
 window.autoTitles = Object.fromEntries(fixture.projects[0].sessions.map(s => [s.id,s.title]));
-window.fixtureStatus = {state:'working',operations:[],context:{EstimatedTokens:2048}};
+window.fixtureStatus = {state:'working',model:'model-old',effort:'high',operations:[],context:{EstimatedTokens:2048}};
+window.modelFixture = {provider:'openai-codex',models:[
+  {id:'model-old',name:'Старая мадэль',efforts:[{effort:'high'}],default_effort:'high'},
+  {id:'model-new',name:'Новая мадэль',efforts:[{effort:'medium'},{effort:'future-effort'}],default_effort:'medium'},
+  {id:'model-unknown',name:'Без метаданых',efforts:null,default_effort:''}
+]};
 window.fetch = async (url, options = {}) => {
   const body = options.body && JSON.parse(options.body);
   if (options.method) {
@@ -35,6 +40,7 @@ window.fetch = async (url, options = {}) => {
     if (apiDelay) await new Promise(r => setTimeout(r,apiDelay));
     if (window.holdRename && url.endsWith('/rename')) await new Promise(r => { window.releaseRename = r; });
     if (failNext) { failNext = false; throw new TypeError('offline'); }
+    if (url.endsWith('/settings')) { Object.assign(fixtureStatus,body); return {ok:true,json:async()=>structuredClone(fixtureStatus)}; }
     if (url.endsWith('/stop')) fixtureStatus.state = 'stopped';
     if (url.endsWith('/resume')) fixtureStatus.state = 'working';
     if (url.endsWith('/rename')) {
@@ -46,6 +52,7 @@ window.fetch = async (url, options = {}) => {
     if (options.method === 'DELETE') fixture.projects[0].sessions = fixture.projects[0].sessions.filter(s => !url.endsWith('/'+s.id));
     return {ok:true,json:async()=>({deleted:true})};
   }
+  if (url.includes('/models')) return {ok:true,json:async()=>({...structuredClone(modelFixture),current:{model:fixtureStatus.model,effort:fixtureStatus.effort}})};
   return {ok:true,json:async()=>url.endsWith('navigation') ? structuredClone(fixture) : url.includes('/sessions/') ? {
     items:[{kind:'user',id:'u1',text:'Праверым выгляд і паводзіны інтэрфейсу.'},{kind:'assistant',id:'a1',html:'<p>Гісторыя застаецца пасля вызвалення рэсурсаў.</p><pre><code>go test ./cmd/internal/webchat</code></pre>'}],
     after:2,more:false,status:structuredClone(fixtureStatus)
@@ -126,6 +133,49 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
         assert.deepEqual(await evaluate(`[1,2,5,11,21,22,25].map(conversationCount)`),['1 размова','2 размовы','5 размоў','11 размоў','21 размова','22 размовы','25 размоў']);
         assert.equal(await evaluate(`$('send').disabled`),true,'empty send enabled');
         await fits();
+
+        // Model picker: dynamic efforts, refresh, failed save, scoped updates and drafts.
+        await evaluate(`$('message').value='Чарнавік перад зменай мадэлі';$('message').dispatchEvent(new Event('input'))`);
+        await click('model-settings');
+        await wait(`$('model-dialog').open && !modelPicker.loading`);
+        assert.equal(await evaluate(`$('model-choice').value`),'model-old');
+        await evaluate(`$('model-choice').value='model-new';$('model-choice').dispatchEvent(new Event('change'))`);
+        assert.deepEqual(await evaluate(`[...$('effort-choice').options].map(o=>o.value)`),['','medium','future-effort']);
+        assert.equal(await evaluate(`$('effort-choice').value`),'medium','new model must not retain incompatible old effort');
+        await evaluate(`$('effort-choice').value='future-effort';modelFixture.warning='Каталог можа быць састарэлы';$('refresh-models').click()`);
+        await wait(`!modelPicker.loading`);
+        assert.equal(await evaluate(`$('effort-choice').value`),'future-effort','refresh lost selection');
+        assert.equal(await evaluate(`$('model-catalog-note').textContent.includes('састарэлы')`),true);
+        await fits();
+        if (process.env.UI_SCREENSHOTS) {
+          const shot = await run('Page.captureScreenshot',{format:'png'});
+          writeFileSync(join(process.env.UI_SCREENSHOTS,`models-${width}.png`),Buffer.from(shot.data,'base64'));
+        }
+        await evaluate(`failNext=true;apiDelay=120;$('model-form').requestSubmit();$('model-form').requestSubmit()`);
+        await key('Escape');
+        assert.equal(await evaluate(`$('model-dialog').open`),true,'save must not close on Escape');
+        await wait(`!modelPicker.saving && $('model-error').textContent`);
+        assert.equal(await evaluate(`$('effort-choice').value==='future-effort' && requests.filter(r=>r.url.endsWith('/settings')).length===1`),true);
+        await evaluate(`apiDelay=0;$('model-form').requestSubmit()`);
+        await wait(`!modelPicker.saving && !$('model-dialog').open`);
+        assert.equal(await evaluate(`$('message').value`),'Чарнавік перад зменай мадэлі');
+        assert.deepEqual(await evaluate(`requests.filter(r=>r.url.endsWith('/settings')).at(-1).body`),{model:'model-new',effort:'future-effort'});
+        assert.equal(await evaluate(`$('model-settings').textContent.includes('future-effort')`),true);
+        await click('model-settings'); await wait(`!modelPicker.loading`);
+        await evaluate(`$('model-choice').value='model-unknown';$('model-choice').dispatchEvent(new Event('change'))`);
+        assert.deepEqual(await evaluate(`[...$('effort-choice').options].map(o=>o.value)`),['','*']);
+        assert.equal(await evaluate(`$('effort-note').textContent.includes('не паведаміў')`),true);
+        await evaluate(`$('effort-choice').value='*';$('effort-choice').dispatchEvent(new Event('change'));$('effort-custom').value='high'`);
+        assert.equal(await evaluate(`$('effort-custom').hidden`),false);
+        // Changing navigation while a dialog is open must not retarget its save.
+        await evaluate(`(async()=>{await selectSession('second');$('model-form').requestSubmit()})()`);
+        await wait(`!modelPicker.saving && !$('model-dialog').open`);
+        assert.equal(await evaluate(`requests.filter(r=>r.url.endsWith('/settings')).at(-1).url`),'/api/projects/project/sessions/first/settings');
+        await evaluate(`(async()=>{await selectSession('first');$('message').value='';$('message').dispatchEvent(new Event('input'));modelFixture.warning=''})()`);
+
+        await evaluate(`window.previousModelID=state.status.model;state.status.model='very-long-model-name-'.repeat(12);renderModelLabel()`);
+        await fits();
+        await evaluate(`state.status.model=previousModelID;renderModelLabel()`);
 
         // Common text button geometry, including dynamically generated controls.
         const styles = await evaluate(`['stop','send','rename-session','confirm-rename','delete-session','confirm-delete'].map(id=>{const s=getComputedStyle($(id));return [s.fontSize,s.fontWeight,s.padding,s.minHeight]})`);

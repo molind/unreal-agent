@@ -29,8 +29,10 @@ type Config struct {
 }
 
 type Client struct {
-	adapter llm.Adapter
-	remote  *primitives.RemoteClient
+	adapter        llm.Adapter
+	remote         *primitives.RemoteClient
+	catalogURL     string
+	catalogHeaders http.Header
 }
 
 var _ llm.Adapter = (*Client)(nil)
@@ -70,7 +72,11 @@ func NewClient(config Config) (*Client, error) {
 		_ = remote.Close()
 		return nil, err
 	}
-	return &Client{adapter: adapter, remote: remote}, nil
+	return &Client{adapter: adapter, remote: remote, catalogURL: baseURL + "/models", catalogHeaders: http.Header{
+		"Authorization":      {"Bearer " + credentials.accessToken},
+		"ChatGPT-Account-Id": {credentials.accountID},
+		"Originator":         {"unreal-agent"}, "User-Agent": {"unreal-agent"},
+	}}, nil
 }
 
 func (client *Client) Respond(ctx context.Context, request llm.Request, options llm.RequestOptions) (llm.Response, error) {

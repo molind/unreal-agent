@@ -53,8 +53,10 @@ but is not used by Codex. Ollama does not need a key.
 | `-session-directory DIR` | XDG workspace state directory (see below); relative overrides are workspace-relative |
 | `-storage-format sqlite\|jsonl` | `sqlite`; `jsonl` retains the old workspace-local layout |
 
-Flags override environment values. Reasoning effort supports `low`, `medium`,
-`high`, `xhigh`, and `max` (provider support varies). Unlike the one-shot runner,
+Flags override environment values. Reasoning effort supports `none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, `max`, `ultra`, and `persistent` (provider/model
+support varies). A per-conversation model/effort saved with the web picker takes
+precedence on resume; otherwise launch settings apply. Unlike the one-shot runner,
 chat does **not** load `.env` files or apply sandbox proxy configuration. Export
 settings in the launching shell. Never paste credentials into the conversation.
 
@@ -466,7 +468,7 @@ can keep substantially more than two blocks. The example is schematic, not a
 fixed count of four messages. A later approved compaction can include the prior
 summary and another older portion; summaries do not accumulate indefinitely.
 
-A separate tool-free request to the same model (low reasoning effort) creates a
+A separate tool-free request to the same model (with the selected reasoning effort) creates a
 bounded factual handoff: goal, constraints, decisions, changes/paths, checks,
 unresolved issues and next steps. Historical images/private reasoning are
 omitted from that text extract. Summaries are lossy requests that consume tokens

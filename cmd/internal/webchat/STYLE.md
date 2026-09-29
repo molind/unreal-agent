@@ -68,6 +68,12 @@ The mobile sidebar marks the main area inert while open, contains keyboard focus
 closes with Escape and restores focus to its opener. Native dialogs manage their
 own modal focus even when opened from the sidebar.
 
+The composer has a quiet compact **Мадэль і effort…** control (showing the saved
+selection when known). It opens the shared model dialog: native model/effort
+selects, explicit manual fallback, refresh and cancel/save actions. Catalog
+warnings are visible; unknown efforts must never look like confirmed capabilities.
+Live updates must not replace an open dialog's selections or captured conversation.
+
 ## Dialogs and feedback
 
 Use native `<dialog>` with `aria-labelledby`, a form, explanatory paragraphs, an

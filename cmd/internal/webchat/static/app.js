@@ -72,6 +72,9 @@ function errorText(text) {
     'server is shutting down': 'Сервер спыняецца. Пачакайце аднаўлення сувязі.',
     'session is closed': 'Размова ўжо спыненая. Паўтарыце дзеянне.',
     'session is not running': 'Праца ў гэтай размове не запушчаная.',
+    'invalid model settings': 'Праверце ID мадэлі і reasoning effort.',
+    'reasoning effort is not supported by this model': 'Гэты effort не падтрымліваецца мадэллю. Абнавіце каталог і выберыце іншае значэнне.',
+    'runtime stopped before saving model settings': 'Праца спынілася да захавання налад мадэлі. Паўтарыце захаванне.',
     'compaction request is no longer pending': 'Запыт на сцісканне кантэксту ўжо неактуальны.',
     'message ID already belongs to different text': 'Гэтае паведамленне ўжо дасланае з іншым тэкстам.',
     'session title is required': 'Увядзіце назву размовы або пакіньце поле пустым для аўтаматычнай назвы.',
@@ -272,6 +275,8 @@ function renderSelection() {
   $('title').textContent = session?.title || project?.name || 'Вашы праекты';
   $('message').disabled = !state.session;
   $('conversation-actions').hidden = !state.session;
+  $('model-settings').hidden = !state.session;
+  renderModelLabel();
   if (!state.session) $('status').textContent = project ? 'Пачніце новую размову' : 'Выберыце праект, каб пачаць';
   updateComposer();
 }
@@ -419,6 +424,7 @@ function renderTool(operation) {
 }
 
 function renderStatus(status) {
+  renderModelLabel();
   const context = status.context;
   $('status').textContent = ({ saved: 'Гісторыя захаваная', stopped: 'Праца спыненая · гісторыя захаваная', working: 'Працуе на вашым камп’ютары', idle: 'Гатовы да новага паведамлення', waiting: 'Чакае вашага рашэння', error: 'Праца спыненая праз памылку' })[status.state] || 'Абнаўляем стан…';
   if (context?.EstimatedTokens) $('status').textContent += ' · ~' + context.EstimatedTokens.toLocaleString('be') + ' токенаў у кантэксце';
@@ -625,4 +631,96 @@ $('decline').addEventListener('click', () => sessionAction('stop'));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleRefresh(); });
 window.addEventListener('online', () => { connection('reconnecting'); scheduleRefresh(); });
 window.addEventListener('offline', () => connection('offline'));
+const modelPicker = { target: null, models: [], loading: false, saving: false };
+function renderModelLabel() {
+  const s = state.status;
+  $('model-settings').textContent = s?.model ? s.model + ' / ' + (s.effort || 'па змаўчанні') + ' · Змяніць…' : 'Мадэль і effort…';
+}
+function modelPath(target) { return 'projects/' + target.project + '/sessions/' + target.session; }
+function modelSelection() {
+  return { model: $('model-choice').value || $('model-custom').value.trim(), effort: $('effort-choice').value === '*' ? $('effort-custom').value.trim() : $('effort-choice').value };
+}
+function modelBusy() {
+  for (const id of ['model-choice', 'model-custom', 'effort-choice', 'effort-custom', 'confirm-model', 'refresh-models']) $(id).disabled = modelPicker.loading || modelPicker.saving;
+  $('cancel-model').disabled = modelPicker.saving;
+  $('confirm-model').textContent = modelPicker.saving ? 'Захоўваем…' : 'Захаваць';
+  $('refresh-models').textContent = modelPicker.loading ? 'Абнаўляем…' : 'Абнавіць спіс';
+}
+function effortFields(preferred) {
+  const id = $('model-choice').value || $('model-custom').value.trim();
+  const model = modelPicker.models.find(m => m.id === id);
+  const known = Array.isArray(model?.efforts);
+  $('model-custom').hidden = $('model-custom-label').hidden = !!$('model-choice').value;
+  const select = $('effort-choice');
+  select.replaceChildren(new Option('Па змаўчанні правайдара' + (model?.default_effort ? ' (' + model.default_effort + ')' : ''), ''));
+  for (const effort of model?.efforts || []) {
+    const option = new Option(effort.effort, effort.effort); option.title = effort.description || ''; select.append(option);
+  }
+  if (!known) select.append(new Option('Задаць уручную…', '*'));
+  const value = preferred ?? model?.default_effort ?? '';
+  if (value && ![...select.options].some(o => o.value === value)) {
+    if (!known) { select.value = '*'; $('effort-custom').value = value; }
+    else { select.append(new Option(value + ' — няма ў каталогу', value)); select.value = value; }
+  } else select.value = value;
+  $('effort-note').textContent = known ? (model.efforts.length ? 'Efforts з каталога правайдара для гэтай мадэлі.' : 'Каталог не пазначае асобных reasoning efforts для гэтай мадэлі.') : 'Правайдар не паведаміў падтрыманыя efforts. Праверце сумяшчальнасць мадэлі з Responses API і інструментамі. Ручны effort не правераны.';
+  manualEffort();
+}
+function manualEffort() { $('effort-custom').hidden = $('effort-custom-label').hidden = $('effort-choice').value !== '*'; }
+function modelOptions(selection) {
+  const select = $('model-choice'); select.replaceChildren();
+  for (const model of modelPicker.models) select.append(new Option(model.name === model.id ? model.id : model.name + ' · ' + model.id, model.id));
+  if (selection.model && !modelPicker.models.some(m => m.id === selection.model)) select.append(new Option(selection.model + ' — няма ў каталогу', selection.model));
+  select.append(new Option('Іншая мадэль уручную…', ''));
+  select.value = selection.model; $('model-custom').value = selection.model;
+  effortFields(selection.effort);
+}
+async function loadModels(force = false) {
+  const target = modelPicker.target;
+  if (!target || modelPicker.loading || modelPicker.saving) return;
+  const previous = modelSelection();
+  modelPicker.loading = true; modelBusy(); $('model-error').textContent = '';
+  try {
+    const data = await api(modelPath(target) + '/models' + (force ? '?refresh=1' : ''));
+    if (modelPicker.target !== target) return;
+    modelPicker.models = data.models;
+    modelOptions(force ? previous : data.current);
+    $('model-catalog-note').textContent = data.warning || ('Каталог: ' + data.provider + '. Абнаўляецца аўтаматычна пры адкрыцці (кэш да 5 хвілін).');
+  } catch (error) { if (modelPicker.target === target) $('model-error').textContent = error.message; }
+  finally { if (modelPicker.target === target) { modelPicker.loading = false; modelBusy(); } }
+}
+$('model-settings').addEventListener('click', () => {
+  if (!state.session || modelPicker.saving) return;
+  modelPicker.target = { project: state.project, session: state.session };
+  modelPicker.models = []; modelPicker.loading = false;
+  $('model-target').textContent = $('title').textContent;
+  $('model-error').textContent = ''; $('model-catalog-note').textContent = 'Загружаем каталог…';
+  modelOptions({ model: state.status?.model || '', effort: state.status?.effort || '' });
+  $('model-dialog').showModal(); $('cancel-model').focus(); loadModels();
+});
+$('cancel-model').addEventListener('click', () => $('model-dialog').close());
+$('model-dialog').addEventListener('close', () => { modelPicker.target = null; modelPicker.loading = false; });
+$('model-dialog').addEventListener('cancel', event => { if (modelPicker.saving) event.preventDefault(); });
+$('model-dialog').addEventListener('keydown', event => { if (event.key === 'Escape' && modelPicker.saving) event.preventDefault(); });
+$('model-choice').addEventListener('change', () => effortFields());
+$('model-custom').addEventListener('input', () => effortFields());
+$('effort-choice').addEventListener('change', manualEffort);
+$('refresh-models').addEventListener('click', () => loadModels(true));
+$('model-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const target = modelPicker.target;
+  if (!target || modelPicker.loading || modelPicker.saving) return;
+  const selection = modelSelection();
+  const model = modelPicker.models.find(m => m.id === selection.model);
+  if (!selection.model || /[^\x21-\x7e]/.test(selection.model) || selection.model.length > 256 || (selection.effort && !/^[a-z0-9_-]{1,64}$/.test(selection.effort))) { $('model-error').textContent = 'Праверце ID мадэлі і effort: без прабелаў, да 256 і 64 знакаў адпаведна.'; return; }
+  if (Array.isArray(model?.efforts) && selection.effort && !model.efforts.some(e => e.effort === selection.effort)) { $('model-error').textContent = 'Гэты effort не падтрымліваецца мадэллю. Выберыце значэнне з каталога.'; return; }
+  modelPicker.saving = true; modelBusy(); $('model-error').textContent = '';
+  try {
+    const status = await api(modelPath(target) + '/settings', selection);
+    $('model-dialog').close();
+    if (state.project === target.project && state.session === target.session) { state.status = status; renderStatus(status); notice('Мадэль і effort захаваныя. Змена дзейнічае з наступнага запыту.'); }
+    scheduleRefresh();
+  } catch (error) { $('model-error').textContent = error.message; }
+  finally { modelPicker.saving = false; modelBusy(); }
+});
+
 connect().catch(error => { if ($('app').hidden) { showLogin(); if (error.status !== 401) $('login-error').textContent = error.message; } else notice(error.message); });

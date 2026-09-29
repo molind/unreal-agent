@@ -22,7 +22,9 @@ type Exchange = responsesapi.Exchange
 
 type Client struct {
 	llm.Adapter
-	remote *primitives.RemoteClient
+	remote     *primitives.RemoteClient
+	catalogURL string
+	apiKey     string
 }
 
 var _ llm.Adapter = (*Client)(nil)
@@ -52,7 +54,7 @@ func NewClient(config Config) (*Client, error) {
 		_ = remote.Close()
 		return nil, err
 	}
-	return &Client{Adapter: adapter, remote: remote}, nil
+	return &Client{Adapter: adapter, remote: remote, catalogURL: baseURL + "/models", apiKey: config.APIKey}, nil
 }
 
 func (client *Client) Close() error {

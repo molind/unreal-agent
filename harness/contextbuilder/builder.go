@@ -74,6 +74,9 @@ func (current *builder) AddControlMessage(request inbox.ControlMessage) {
 	switch request.Mode {
 	case inbox.UpdateSettings:
 		settings := request.Parameters.(inbox.Settings)
+		if settings.Model != "" {
+			current.request.Model.ID = settings.Model
+		}
 		current.request.Model.ReasoningEffort = settings.ReasoningEffort
 	case inbox.Heartbeat:
 		current.stagedSuffix = append(current.stagedSuffix, llm.Item{

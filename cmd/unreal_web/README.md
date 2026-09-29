@@ -176,9 +176,27 @@ server. Credentials never need to be entered on the phone. See the
 
 The flags `-provider`, `-model`, `-reasoning-effort`, `-transport`, `-base-url`, and
 `-max-attempts` override the same `unreal_chat` settings. Defaults are
-`openai-codex / gpt-6-astra / xhigh`. Current server settings apply when a saved
-session is resumed, as with CLI flags. The first version does not have a per-chat
-model editor. Renew expired Codex credentials externally and restart the server.
+`openai-codex / gpt-6-astra / xhigh`. These are defaults for conversations without
+an explicit model selection. **Мадэль і effort…** above the composer opens a
+per-conversation picker. Model and effort are saved atomically in session history,
+survive server restart/release, and apply to the next model request without
+interrupting current generation/tools or starting stopped work. CLI resume also
+honors an explicit saved selection. Provider/authentication remain server settings.
+
+For `openai-codex`, the authenticated `/models` catalog supplies the visible models,
+per-model reasoning efforts and default effort. New model IDs and new effort values
+are not restricted to a compiled list. Discovery runs when opening the picker,
+is cached for five minutes per owner, and **Абнавіць спіс** forces a refresh.
+Failures retain a clearly marked stale list; manual IDs/efforts are available.
+
+For `openai`, `/v1/models` supplies model IDs only: it does **not** report supported
+reasoning efforts or Responses/tool compatibility. The picker labels these as
+unknown, offers provider-default reasoning (omit the parameter), and optional
+manual effort. It does not claim that all API models can run this coding agent.
+Other providers currently use manual selection. Selecting a catalog model is not
+a guarantee of account quota or compatibility with all saved context.
+
+Renew expired Codex credentials externally and restart the server.
 It does not load `.env` files. Tools have the launching user's local permissions;
 selecting a workspace is not a filesystem sandbox.
 

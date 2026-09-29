@@ -83,10 +83,19 @@ func startRuntime(parent context.Context, c config, id session.ID, store *localf
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, err
 	}
-	// Persist settings before restore so the very first recovered request uses
-	// the selected effort, not the previous launch settings.
+	// Explicit per-session selections survive restart. Legacy sessions continue
+	// using the launch effort. Persist before replay for the first recovered turn.
+	settings, err := savedModelSettings(parent, store, id)
+	if err != nil {
+		return nil, err
+	}
+	if settings.Model == "" {
+		settings.ReasoningEffort = llm.ReasoningEffort(c.effort)
+	} else {
+		c.model, c.effort = settings.Model, string(settings.ReasoningEffort)
+	}
 	if err := store.AppendInput(parent, id, newInput(inbox.InputControl, inbox.ControlMessage{
-		Mode: inbox.UpdateSettings, Parameters: inbox.Settings{ReasoningEffort: llm.ReasoningEffort(c.effort)},
+		Mode: inbox.UpdateSettings, Parameters: settings,
 	})); err != nil {
 		return nil, err
 	}

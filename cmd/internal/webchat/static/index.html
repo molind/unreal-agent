@@ -64,6 +64,7 @@
       <section id="transcript" aria-label="Размова" tabindex="0"><div class="empty"><span class="eyebrow">НА ВАШЫМ КАМП’ЮТАРЫ</span><h2>Месца для<br>вашых ідэй.</h2><p>Дадайце папку праекта на серверы.<br>Пачніце новую размову або працягніце папярэднюю.</p><button id="empty-add" class="primary">Дадаць праект</button></div></section>
       <section id="approval" hidden><p>Кантэкст размовы запоўнены. Дазволіць яшчэ адну спробу сціснуць яго, каб працягнуць працу?</p><div class="actions"><button id="decline" class="quiet">Спыніць</button><button id="approve" class="primary">Сціснуць кантэкст</button></div></section>
       <footer class="composer-area">
+        <div class="actions"><button id="model-settings" class="quiet compact" hidden>Мадэль і effort…</button></div>
         <form id="composer">
           <label class="sr-only" for="message">Паведамленне</label>
           <textarea id="message" rows="3" placeholder="Над чым будзем працаваць?" disabled></textarea>
@@ -80,6 +81,23 @@
     <input id="project-path" placeholder="/Users/you/projects/my-project" autocomplete="off" required>
     <p id="project-error" class="error" role="alert"></p>
     <div class="actions dialog-actions"><button id="cancel-project" type="button" class="quiet">Скасаваць</button><button class="primary">Дадаць праект</button></div>
+  </form></dialog>
+  <dialog id="model-dialog" aria-labelledby="model-heading"><form id="model-form">
+    <h2 id="model-heading">Мадэль размовы</h2>
+    <p id="model-target" class="muted"></p>
+    <p>Змена дзейнічае з наступнага запыту да мадэлі. Бягучы адказ і інструменты не спыняцца. Выбар захаваецца толькі ў гэтай размове.</p>
+    <label for="model-choice">Мадэль</label>
+    <select id="model-choice" aria-describedby="model-catalog-note"></select>
+    <label for="model-custom" id="model-custom-label" hidden>ID мадэлі ўручную</label>
+    <input id="model-custom" autocomplete="off" maxlength="256" hidden>
+    <label for="effort-choice">Глыбіня разважання (reasoning effort)</label>
+    <select id="effort-choice" aria-describedby="effort-note"></select>
+    <label for="effort-custom" id="effort-custom-label" hidden>Effort уручную</label>
+    <input id="effort-custom" autocomplete="off" maxlength="64" placeholder="Напрыклад: high" hidden>
+    <p id="effort-note" class="muted"></p>
+    <p id="model-catalog-note" class="muted" role="status"></p>
+    <p id="model-error" class="error" role="alert"></p>
+    <div class="actions dialog-actions"><button id="cancel-model" type="button" class="quiet">Скасаваць</button><button id="refresh-models" type="button" class="quiet">Абнавіць спіс</button><button id="confirm-model" class="primary">Захаваць</button></div>
   </form></dialog>
   <dialog id="rename-dialog" aria-labelledby="rename-heading"><form id="rename-form">
     <h2 id="rename-heading">Перайменаваць размову</h2>

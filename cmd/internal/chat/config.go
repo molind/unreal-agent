@@ -104,7 +104,7 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 	f.SetOutput(out)
 	f.StringVar(&c.provider, "provider", env("UNREAL_HARNESS_LLM_PROVIDER", "openai-codex"), "provider: openai-codex, openai, ollama, openrouter, fireworks")
 	f.StringVar(&c.model, "model", env("UNREAL_HARNESS_LLM_MODEL", "gpt-6-astra"), "model name")
-	f.StringVar(&c.effort, "reasoning-effort", env("UNREAL_HARNESS_LLM_REASONING_EFFORT", "xhigh"), "reasoning effort: low, medium, high, xhigh, max")
+	f.StringVar(&c.effort, "reasoning-effort", env("UNREAL_HARNESS_LLM_REASONING_EFFORT", "xhigh"), "reasoning effort: none, minimal, low, medium, high, xhigh, max, ultra, persistent (model support varies)")
 	f.StringVar(&c.transport, "transport", getenv("UNREAL_HARNESS_LLM_TRANSPORT"), "auto, websocket, or http; default auto on first-party OpenAI/Codex, HTTP on custom endpoints")
 	f.StringVar(&c.baseURL, "base-url", getenv("UNREAL_HARNESS_LLM_BASE_URL"), "provider base URL override")
 	// URLs may include credentials. Keep their environment value out of -h.
@@ -137,7 +137,7 @@ func parse(args []string, getenv func(string) string, out io.Writer) (config, er
 		return c, errors.New("expected at most one workspace argument (flags must precede workspace)")
 	}
 	if !llm.ReasoningEffort(c.effort).Valid() {
-		return c, errors.New("invalid -reasoning-effort; use low, medium, high, xhigh, or max")
+		return c, errors.New("invalid -reasoning-effort; use none, minimal, low, medium, high, xhigh, max, ultra, or persistent")
 	}
 	if strings.TrimSpace(c.model) == "" {
 		return c, errors.New("model must not be empty")

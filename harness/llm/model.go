@@ -85,16 +85,20 @@ type Model struct {
 type ReasoningEffort string
 
 const (
-	ReasoningEffortLow    ReasoningEffort = "low"
-	ReasoningEffortMedium ReasoningEffort = "medium"
-	ReasoningEffortHigh   ReasoningEffort = "high"
-	ReasoningEffortXHigh  ReasoningEffort = "xhigh"
-	ReasoningEffortMax    ReasoningEffort = "max"
+	ReasoningEffortNone       ReasoningEffort = "none"
+	ReasoningEffortMinimal    ReasoningEffort = "minimal"
+	ReasoningEffortUltra      ReasoningEffort = "ultra"
+	ReasoningEffortPersistent ReasoningEffort = "persistent"
+	ReasoningEffortLow        ReasoningEffort = "low"
+	ReasoningEffortMedium     ReasoningEffort = "medium"
+	ReasoningEffortHigh       ReasoningEffort = "high"
+	ReasoningEffortXHigh      ReasoningEffort = "xhigh"
+	ReasoningEffortMax        ReasoningEffort = "max"
 )
 
 func (effort ReasoningEffort) Valid() bool {
 	switch effort {
-	case ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax:
+	case ReasoningEffortNone, ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh, ReasoningEffortMax, ReasoningEffortUltra, ReasoningEffortPersistent:
 		return true
 	default:
 		return false

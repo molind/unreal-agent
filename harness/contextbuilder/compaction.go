@@ -69,7 +69,7 @@ func (b *builder) PlanCompaction(maxPrefixItems int) (*session.ContextCompaction
 		{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleSystem, Text: summaryInstructions + fmt.Sprintf("\nKeep the handoff under %d UTF-8 bytes.", summaryLimit*2)}},
 		{Type: llm.ItemMessage, Data: llm.Message{Role: llm.RoleUser, Text: history}},
 	}}
-	request.Model.ReasoningEffort = llm.ReasoningEffortLow
+	// Keep the selected effort: models do not universally support "low".
 	request.Model.MaxOutputTokens = nil // Codex subscription transport does not support this field.
 	hash, err := prefixHash(input[1:end])
 	if err != nil {

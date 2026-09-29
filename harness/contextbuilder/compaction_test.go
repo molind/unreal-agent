@@ -52,7 +52,7 @@ func TestCompactionReplacesOnlyAnsweredPrefixAndKeepsInstructions(t *testing.T) 
 	if !reflect.DeepEqual(before, afterPlan) {
 		t.Fatal("planning mutated context")
 	}
-	if len(request.Tools) != 0 || request.Model.ID != "test" || request.Model.ReasoningEffort != llm.ReasoningEffortLow {
+	if len(request.Tools) != 0 || request.Model.ID != "test" || request.Model.ReasoningEffort != llm.ReasoningEffortXHigh {
 		t.Fatal("summary can execute tools or changed model")
 	}
 	if strings.Contains(request.Input[1].Data.(llm.Message).Text, "task-4") {
