@@ -94,15 +94,32 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
         };
         const wait = expression => evaluate(`(async()=>{for(let i=0;i<200;i++){if(${expression})return true;await new Promise(r=>setTimeout(r,10));}throw new Error('Condition timed out');})()`);
         const key = async (key, modifiers=0) => {
-          await run('Input.dispatchKeyEvent',{type:'keyDown',key,modifiers,windowsVirtualKeyCode:key==='Tab'?9:27});
-          await run('Input.dispatchKeyEvent',{type:'keyUp',key,modifiers,windowsVirtualKeyCode:key==='Tab'?9:27});
+          const windowsVirtualKeyCode = {Tab:9,Escape:27,Enter:13,' ':32}[key];
+          const text = key==='Enter' ? '\r' : key===' ' ? ' ' : undefined;
+          await run('Input.dispatchKeyEvent',{type:'keyDown',key,modifiers,windowsVirtualKeyCode,text});
+          await run('Input.dispatchKeyEvent',{type:'keyUp',key,modifiers,windowsVirtualKeyCode});
+        };
+        const pointAt = id => evaluate(`{const e=document.getElementById(${JSON.stringify(id)}),r=e.getBoundingClientRect();if(!r.width||!r.height)throw new Error('Hidden click target: '+e.id);({x:r.x+r.width/2,y:r.y+r.height/2})}`);
+        const click = async id => {
+          const point = await pointAt(id);
+          await run('Input.dispatchMouseEvent',{type:'mouseMoved',...point});
+          await run('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+          await run('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+        };
+        const tap = async id => {
+          const point = await pointAt(id);
+          await run('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});
+          await run('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
         };
         const fits = async () => assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('dialog[open]')].every(e=>e.scrollWidth<=e.clientWidth)`),true,'horizontal overflow');
         await run('Page.enable');
         await run('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:false});
         const {frameTree} = await run('Page.getFrameTree');
         await run('Page.setDocumentContent',{frameId:frameTree.frame.id,html});
-        await evaluate(fixture+js);
+        await evaluate(fixture);
+        // Load a standalone classic script, as production does. Concatenating the
+        // fixture with app.js would silently disable app.js's 'use strict'.
+        await evaluate(`window.uiErrors=[];window.addEventListener('error',e=>uiErrors.push(e.message));window.addEventListener('unhandledrejection',e=>uiErrors.push(String(e.reason)));const script=document.createElement('script');script.textContent=${JSON.stringify(js)};document.head.append(script);`);
         await wait(`state.session === 'first' && state.status && !state.refreshing`);
         assert.equal(await evaluate(`document.documentElement.lang`),'be');
         assert.equal(await evaluate(`!!document.getElementById('release')`),false);
@@ -120,6 +137,56 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
         const reconnecting = await evaluate(`connection('reconnecting');getComputedStyle($('connection'),'::before').backgroundColor`);
         assert.notEqual(connected,reconnecting);
         await evaluate(`connection('connected')`);
+
+        // Use browser input, not element.click(): pointerdown changes focus before
+        // click, and can remove the target if the menu closes on focusout.
+        await click('toggle-actions');
+        await click('rename-session');
+        assert.equal(await evaluate(`$('rename-dialog').open`),true,'pointer click must open rename');
+        await click('cancel-rename');
+        // Safari-style buttons may blur the old control without focusing the
+        // pressed button (focusout.relatedTarget is null). Reproduce that order.
+        await evaluate(`window.noButtonFocus = event => { if (event.target.closest('#conversation-actions button')) { event.preventDefault(); document.activeElement.blur(); } }; document.addEventListener('mousedown',noButtonFocus,true);`);
+        await click('toggle-actions');
+        await click('rename-session');
+        assert.equal(await evaluate(`$('rename-dialog').open`),true,'focus loss during pointerdown must not swallow rename click');
+        await click('cancel-rename');
+        await click('toggle-actions');
+        await click('delete-session');
+        assert.equal(await evaluate(`$('delete-dialog').open`),true,'focus loss must not swallow delete click');
+        await click('cancel-delete');
+        if (width<761) {
+          await run('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+          await tap('toggle-actions');
+          await tap('rename-session');
+          await wait(`$('rename-dialog').open`);
+          await tap('cancel-rename');
+          await tap('toggle-actions');
+          await tap('delete-session');
+          await wait(`$('delete-dialog').open`);
+          await tap('cancel-delete');
+          await run('Emulation.setTouchEmulationEnabled',{enabled:false});
+        }
+        await evaluate(`document.removeEventListener('mousedown',noButtonFocus,true)`);
+        // Unknown focus loss alone is not dismissal, but an outside click is.
+        await click('toggle-actions');
+        await evaluate(`document.activeElement.blur()`);
+        await click('transcript');
+        assert.equal(await evaluate(`$('conversation-actions-panel').hidden`),true);
+        await click('toggle-actions');
+        await key('Tab');
+        assert.equal(await evaluate(`document.activeElement.id`),'delete-session');
+        await key('Tab');
+        assert.equal(await evaluate(`$('conversation-actions-panel').hidden`),true,'Tab outside must dismiss the menu');
+        await click('toggle-actions');
+        await evaluate(`window.dispatchEvent(new Event('blur'))`);
+        assert.equal(await evaluate(`$('conversation-actions-panel').hidden`),true,'window blur must dismiss the menu');
+        for (const activation of ['Enter',' ']) {
+          await click('toggle-actions');
+          await key(activation);
+          assert.equal(await evaluate(`$('rename-dialog').open`),true,'keyboard activation must open rename');
+          await click('cancel-rename');
+        }
 
         // Disclosure and destructive confirmation remain keyboard reachable.
         await evaluate(`$('toggle-actions').click()`);
@@ -233,6 +300,7 @@ test('Belarusian web UI: desktop/mobile, focus, actions and drafts', { skip: !ch
         await wait(`!state.renaming && $('rename-error').textContent.includes('выдаленая')`);
         assert.equal(await evaluate(`$('rename-dialog').open && $('rename-title').value==='Не губляць назву' && state.session===''`),true);
         await evaluate(`$('cancel-rename').click()`);
+        assert.deepEqual(await evaluate(`uiErrors`),[],'browser console errors');
         await call('Target.closeTarget',{targetId});
       });
     }

@@ -505,7 +505,14 @@ $('close-sidebar').addEventListener('click', () => sidebar(false));
 matchMedia('(max-width:760px)').addEventListener('change', () => sidebar(false));
 $('toggle-actions').addEventListener('click', () => actionMenu($('conversation-actions-panel').hidden, true));
 document.addEventListener('click', event => { if (!$('conversation-actions').contains(event.target)) actionMenu(false); });
-$('conversation-actions').addEventListener('focusout', event => { if (!$('conversation-actions').contains(event.relatedTarget)) actionMenu(false); });
+$('conversation-actions').addEventListener('focusout', event => {
+  // Safari can blur a button on pointerdown without focusing the pressed one.
+  // A null relatedTarget is not an outside focus destination: hiding the menu
+  // here removes the button before its click can open the dialog. Outside clicks,
+  // known outside focus destinations, Escape and window blur still dismiss it.
+  if (event.relatedTarget && !$('conversation-actions').contains(event.relatedTarget)) actionMenu(false);
+});
+window.addEventListener('blur', () => actionMenu(false));
 document.addEventListener('keydown', event => {
   if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape') {

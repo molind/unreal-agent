@@ -56,8 +56,11 @@ The conversation header contains title/status and a single `⋯` disclosure butt
 Renaming uses the shared dialog/form styles, prefills and selects the current
 name, and offers **Скасаваць** / **Захаваць**. Keep typed names intact on errors
 and live updates; bind submission to the conversation that opened the dialog.
-The disclosure has `aria-expanded`/`aria-controls`, closes on Escape, outside click
-or focus leaving the group, and returns focus appropriately. It is a disclosure,
+The disclosure has `aria-expanded`/`aria-controls`, closes on Escape, outside click,
+focus moving to a known outside control, or window blur, and returns focus
+appropriately. A `focusout` with null `relatedTarget` is not sufficient to dismiss
+it: Safari can emit that before an action's pointer click. Test mouse/touch event
+sequences, not just programmatic `.click()` calls. It is a disclosure,
 not an ARIA menu requiring arrow-key navigation. There is no manual Release button:
 idle resource cleanup is automatic and does not delete conversations.
 
